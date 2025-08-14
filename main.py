@@ -6,7 +6,7 @@ from typing import Dict, List, Set
 
 print("🚀 Starting RentRadar Demo…")
 
-WEBHOOK_URL = "BLANK"
+WEBHOOK_URL = "https://hook.eu2.make.com/m4n56tg2c1txony43nlyjrrsykkf7ij4"
 GOOD_PROFIT_TARGET = 1200
 BOOKING_FEE_PCT = 0.15
 
