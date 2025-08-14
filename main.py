@@ -6,7 +6,8 @@ from typing import Dict, List, Set
 
 print("🚀 Starting RentRadar Demo…")
 
-WEBHOOK_URL = "https://hook.eu2.make.com/m4n56tg2c1txony43nlyjrrsykkf7ij4"
+# ===== Config =====
+WEBHOOK_URL = "https://hook.eu2.make.com/yhupboymwhht7vggrp27wlqjs4sn4886"
 GOOD_PROFIT_TARGET = 1200
 BOOKING_FEE_PCT = 0.15
 
@@ -25,8 +26,7 @@ AREAS = {
         "rates": {
             1: {"adr": 95, "occ": 0.67},  # PL1
             2: {"adr": 130, "occ": 0.68}, # PL1
-            # PL4 slightly different ADRs
-            "PL4_1": {"adr": 96, "occ": 0.64},
+            "PL4_1": {"adr": 96, "occ": 0.64},  # PL4
             "PL4_2": {"adr": 120, "occ": 0.65}
         }
     },
@@ -40,22 +40,25 @@ AREAS = {
     }
 }
 
+# ===== Helpers =====
 def monthly_net_from_adr(adr: float, occ: float) -> float:
     return adr * occ * 30 * (1 - BOOKING_FEE_PCT)
 
 def get_closest_rate(area: str, location_id: str, bedrooms: int):
     rates = AREAS[area]["rates"]
 
-    # Special case: Plymouth has different PL4 rates
+    # Special case for PL4
     if area == "Plymouth" and location_id == "OUTCODE^2083":
         key = f"PL4_{bedrooms}"
         if key in rates:
             return rates[key]
-    
+
     if bedrooms in rates:
         return rates[bedrooms]
-    # Bedroom flexibility: closest match
-    closest_beds = min(rates.keys(), key=lambda x: abs((x if isinstance(x, int) else int(x.split("_")[1])) - bedrooms))
+
+    # Closest match ±1 bedroom
+    valid_keys = [b for b in rates.keys() if isinstance(b, int)]
+    closest_beds = min(valid_keys, key=lambda x: abs(x - bedrooms))
     return rates[closest_beds]
 
 def calculate_profits(rent_pcm: int, area: str, location_id: str, bedrooms: int):
@@ -68,6 +71,7 @@ def calculate_profits(rent_pcm: int, area: str, location_id: str, bedrooms: int)
 
     return {
         "adr": adr,
+        "occ": rate_data["occ"],
         "bills": bills,
         "profit_50": profit(0.50),
         "profit_70": profit(0.70),
@@ -75,22 +79,27 @@ def calculate_profits(rent_pcm: int, area: str, location_id: str, bedrooms: int)
     }
 
 def format_whatsapp_message(listing: dict) -> str:
+    # Score out of 10
+    score10 = round(max(0, min(10, (listing['profit_70'] / GOOD_PROFIT_TARGET) * 10)), 1)
+    avg_occ_pct = int(listing['occ'] * 100)
     tick = "✅" if listing["profit_70"] >= GOOD_PROFIT_TARGET else "❌"
+
     return (
-        f"🏠 New RentRadar Deal — {listing['area']}\n"
-        f"📍 Location: {listing['address']}\n"
-        f"🛏 Bedrooms: {listing['bedrooms']}\n"
-        f"💷 Monthly Rent: £{listing['rent_pcm']}\n\n"
-        f"💰 ADR: £{listing['adr']}/night\n"
-        f"📊 Monthly Bills: £{listing['bills']}\n\n"
-        f"📈 Projected Profits:\n"
-        f"• 50% Occ: £{listing['profit_50']}\n"
-        f"• 70% Occ: £{listing['profit_70']} {tick} Target £{GOOD_PROFIT_TARGET}\n"
-        f"• 100% Occ: £{listing['profit_100']}\n\n"
-        f"🔗 View Listing: {listing['url']}"
+        f"🔔 New Rent-to-SA Lead 🔵\n"
+        f"Score: {score10}/10\n\n"
+        f"📍 {listing['address']} — {listing['area']}\n"
+        f"🏠 {listing['bedrooms']}-bed {listing.get('property_type', '')} | 🛁 {listing.get('bathrooms', 'N/A')} baths\n"
+        f"💷 Rent: £{listing['rent_pcm']}/mo | 📊 Bills: £{listing['bills']}/mo | 💳 Fees: {int(BOOKING_FEE_PCT*100)}%\n\n"
+        f"💰 Profit (ADR £{listing['adr']} / Avg Occ: {avg_occ_pct}%)\n"
+        f"• 50% → £{listing['profit_50']}\n"
+        f"• 70% → £{listing['profit_70']} {tick} Target £{GOOD_PROFIT_TARGET}\n"
+        f"• 100% → £{listing['profit_100']}\n\n"
+        f"🔗 View listing: {listing['url']}\n\n"
+        f"⚠️ Disclaimer: This is an estimated serviced accommodation projection based on average ADR & occupancy for the area. "
+        f"Figures are indicative only and should be verified before making investment decisions."
     )
 
-def fetch_properties(location_id: str, min_beds: int = 1, max_beds: int = 4, min_rent: int = 750, max_rent: int = 1200):
+def fetch_properties(location_id: str, min_beds=1, max_beds=4, min_rent=750, max_rent=1200):
     params = {
         "locationIdentifier": location_id,
         "numberOfPropertiesPerPage": 24,
@@ -131,7 +140,10 @@ def filter_properties(properties: List[Dict], area: str, location_id: str):
                 "address": prop.get("displayAddress", "Unknown"),
                 "rent_pcm": rent,
                 "bedrooms": beds,
+                "bathrooms": prop.get("bathrooms") or "N/A",
+                "property_type": prop.get("propertySubType", "").title(),
                 "adr": p["adr"],
+                "occ": p["occ"],
                 "bills": p["bills"],
                 "profit_50": p["profit_50"],
                 "profit_70": p["profit_70"],
