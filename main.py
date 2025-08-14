@@ -4,71 +4,58 @@ import random
 import requests
 from typing import Dict, List, Set
 
-print("🚀 Starting RentRadar Demo…")
+print("🚀 Starting RentRadar Demo Mode…")
 
-# ===== Config =====
+# ========= Config =========
 WEBHOOK_URL = "https://hook.eu2.make.com/m4n56tg2c1txony43nlyjrrsykkf7ij4"
-GOOD_PROFIT_TARGET = 1200
-BOOKING_FEE_PCT = 0.15
 
-AREAS = {
-    "Blackpool": {
-        "location_ids": ["OUTCODE^915", "OUTCODE^916"],  # FY1, FY2
-        "bills": 395,
-        "rates": {
-            2: {"adr": 125, "occ": 0.50},
-            3: {"adr": 145, "occ": 0.51}
-        }
-    },
-    "Plymouth": {
-        "location_ids": ["OUTCODE^2054", "OUTCODE^2083"],  # PL1, PL4
-        "bills": 360,
-        "rates": {
-            1: {"adr": 95, "occ": 0.67},  # PL1
-            2: {"adr": 130, "occ": 0.68}, # PL1
-            "PL4_1": {"adr": 96, "occ": 0.64},  # PL4
-            "PL4_2": {"adr": 120, "occ": 0.65}
-        }
-    },
-    "Llandudno": {
-        "location_ids": ["OUTCODE^1464", "OUTCODE^1465"],  # LL30, LL31
-        "bills": 430,
-        "rates": {
-            3: {"adr": 167, "occ": 0.63},
-            4: {"adr": 272, "occ": 0.61}
-        }
-    }
+# Location IDs from Rightmove URLs
+LOCATION_IDS: Dict[str, str] = {
+    "FY1": "OUTCODE^915",
+    "PL1": "OUTCODE^2054",
+    "PL4": "OUTCODE^2083",
+    "LL30": "OUTCODE^1464",
 }
 
-# ===== Helpers =====
+# ADR, occupancy, bills by area + bedrooms
+AREA_DATA = {
+    "FY1": {
+        2: {"adr": 125, "occ": 0.50, "bills": 600},
+        3: {"adr": 145, "occ": 0.51, "bills": 600},
+    },
+    "PL1": {
+        1: {"adr": 95, "occ": 0.67, "bills": 580},
+        2: {"adr": 130, "occ": 0.68, "bills": 580},
+    },
+    "PL4": {
+        1: {"adr": 96, "occ": 0.64, "bills": 580},
+        2: {"adr": 120, "occ": 0.65, "bills": 580},
+    },
+    "LL30": {
+        3: {"adr": 167, "occ": 0.63, "bills": 620},
+        4: {"adr": 272, "occ": 0.61, "bills": 620},
+    },
+}
+
+BOOKING_FEE_PCT = 0.15
+GOOD_PROFIT_TARGET = 1200  # target for 70% occ
+
+# ========= Helpers =========
 def monthly_net_from_adr(adr: float, occ: float) -> float:
-    return adr * occ * 30 * (1 - BOOKING_FEE_PCT)
+    gross = adr * occ * 30
+    return gross * (1 - BOOKING_FEE_PCT)
 
-def get_closest_rate(area: str, location_id: str, bedrooms: int):
-    rates = AREAS[area]["rates"]
+def calculate_profits(rent_pcm: int, area: str, beds: int):
+    data = AREA_DATA.get(area, {}).get(beds)
+    if not data:
+        return None
+    adr = data["adr"]
+    occ = data["occ"]
+    bills = data["bills"]
 
-    # Special case for PL4
-    if area == "Plymouth" and location_id == "OUTCODE^2083":
-        key = f"PL4_{bedrooms}"
-        if key in rates:
-            return rates[key]
-
-    if bedrooms in rates:
-        return rates[bedrooms]
-
-    # Closest match ±1 bedroom
-    valid_keys = [b for b in rates.keys() if isinstance(b, int)]
-    closest_beds = min(valid_keys, key=lambda x: abs(x - bedrooms))
-    return rates[closest_beds]
-
-def calculate_profits(rent_pcm: int, area: str, location_id: str, bedrooms: int):
-    rate_data = get_closest_rate(area, location_id, bedrooms)
-    adr = rate_data["adr"]
-    occ = rate_data["occ"]
-    bills = AREAS[area]["bills"]
-
-    def profit(occ_pct: float):
-        return int(round(monthly_net_from_adr(adr, occ_pct) - rent_pcm - bills))
+    def profit(occ_val: float) -> int:
+        net_income = monthly_net_from_adr(adr, occ_val)
+        return int(round(net_income - rent_pcm - bills))
 
     return {
         "adr": adr,
@@ -76,37 +63,39 @@ def calculate_profits(rent_pcm: int, area: str, location_id: str, bedrooms: int)
         "bills": bills,
         "profit_50": profit(0.50),
         "profit_70": profit(0.70),
-        "profit_100": profit(1.0)
+        "profit_100": profit(1.00),
     }
 
-def format_message(listing: dict) -> str:
-    score10 = round(max(0, min(10, (listing['profit_70'] / GOOD_PROFIT_TARGET) * 10)), 1)
-    avg_occ_pct = int(listing['occ'] * 100)
+def format_whatsapp_message(listing: dict, extra_count: int = 0) -> str:
     tick = "✅" if listing["profit_70"] >= GOOD_PROFIT_TARGET else "❌"
+    score10 = round(max(0, min(10, (listing["profit_70"] / GOOD_PROFIT_TARGET) * 10)), 1)
+    avg_occ_pct = int(listing["occ"] * 100)
 
-    disclaimer_cta = (
-        "📌 Estimate figures drawn from Booking.com, AirBnB & Property Market Intel.\n"
-        "We advise you do your own due diligence.\n\n"
-        "💡 Want exclusive property leads tailored to you?\n"
-        "We can set up your own personal feed with your exact criteria, target area, and private deals — starting from £29/month.\n"
-        "Sign up at rent-radar.co.uk or email support@rent-radar.co.uk"
-    )
-
-    return (
+    msg = (
         f"🔔 New Rent-to-SA Lead 🔵\n"
         f"Score: {score10}/10\n\n"
         f"📍 {listing['address']} — {listing['area']}\n"
-        f"🏠 {listing['bedrooms']}-bed {listing.get('property_type', '')} | 🛁 {listing.get('bathrooms', 'N/A')} baths\n"
+        f"🏠 {listing['bedrooms']}-bed | 🛁 {listing.get('bathrooms', 'N/A')} baths\n"
         f"💷 Rent: £{listing['rent_pcm']}/mo | 📊 Bills: £{listing['bills']}/mo | 💳 Fees: {int(BOOKING_FEE_PCT*100)}%\n\n"
         f"💰 Profit (ADR £{listing['adr']} / Avg Occ: {avg_occ_pct}%)\n"
         f"• 50% → £{listing['profit_50']}\n"
         f"• 70% → £{listing['profit_70']} {tick} Target £{GOOD_PROFIT_TARGET}\n"
         f"• 100% → £{listing['profit_100']}\n\n"
         f"🔗 View listing: {listing['url']}\n\n"
-        f"{disclaimer_cta}"
+        f"📌 Estimate figures drawn from Booking.com, AirBnB & Property Market Intel.\n"
+        f"We advise you do your own due diligence.\n\n"
+        f"💡 Want exclusive property leads tailored to you?\n"
+        f"We can set up your own personal feed with your exact criteria, target area, and private deals — starting from £29/month.\n"
+        f"Sign up at rent-radar.co.uk or email support@rent-radar.co.uk"
     )
 
-def fetch_properties(location_id: str, min_beds=1, max_beds=4, min_rent=750, max_rent=1200):
+    if extra_count > 0:
+        msg += f"\n\n⚠️ {extra_count} more matching properties found today — available on the paid plan."
+
+    return msg
+
+# ========= Rightmove fetch =========
+def fetch_properties(location_id: str) -> List[Dict]:
     params = {
         "locationIdentifier": location_id,
         "numberOfPropertiesPerPage": 24,
@@ -115,102 +104,104 @@ def fetch_properties(location_id: str, min_beds=1, max_beds=4, min_rent=750, max
         "channel": "RENT",
         "currencyCode": "GBP",
         "sortType": 6,
+        "viewType": "LIST",
         "_includeLetAgreed": "on",
-        "minBedrooms": min_beds,
-        "maxBedrooms": max_beds,
-        "minPrice": min_rent,
-        "maxPrice": max_rent + 100  # widened cap
     }
+    url = "https://www.rightmove.co.uk/api/_search"
     try:
-        r = requests.get("https://www.rightmove.co.uk/api/_search", params=params, timeout=30)
-        if r.status_code != 200:
-            print(f"⚠️ Failed API call {r.status_code} for {location_id}")
+        resp = requests.get(url, params=params, timeout=30)
+        if resp.status_code != 200:
+            print(f"⚠️ API request failed: {resp.status_code} for {location_id}")
             return []
-        return r.json().get("properties", [])
+        return resp.json().get("properties", [])
     except Exception as e:
-        print(f"⚠️ Exception fetching {location_id}: {e}")
+        print(f"⚠️ Exception fetching properties: {e}")
         return []
 
-def filter_properties(properties: List[Dict], area: str, location_id: str):
+# ========= Filter =========
+def filter_properties(properties: List[Dict], area: str) -> List[Dict]:
     results = []
     for prop in properties:
         try:
             beds = prop.get("bedrooms")
             rent = prop.get("price", {}).get("amount")
+            baths = prop.get("bathrooms") or "N/A"
             if not beds or not rent:
                 continue
-
-            p = calculate_profits(rent, area, location_id, beds)
-
-            # Get image URL if available
+            p = calculate_profits(rent, area, beds)
+            if not p:
+                continue
             image_url = None
-            if "propertyImages" in prop:
-                if "mainImageSrc" in prop["propertyImages"]:
-                    image_url = prop["propertyImages"]["mainImageSrc"]
-                elif "images" in prop["propertyImages"] and len(prop["propertyImages"]["images"]) > 0:
-                    image_url = prop["propertyImages"]["images"][0].get("srcUrl")
-
+            if prop.get("propertyImages") and prop["propertyImages"].get("mainImageSrc"):
+                image_url = prop["propertyImages"]["mainImageSrc"]
             listing = {
                 "id": prop.get("id"),
                 "area": area,
                 "address": prop.get("displayAddress", "Unknown"),
                 "rent_pcm": rent,
                 "bedrooms": beds,
-                "bathrooms": prop.get("bathrooms") or "N/A",
-                "property_type": prop.get("propertySubType", "").title(),
+                "bathrooms": baths,
+                "url": f"https://www.rightmove.co.uk{prop.get('propertyUrl')}",
                 "adr": p["adr"],
                 "occ": p["occ"],
                 "bills": p["bills"],
                 "profit_50": p["profit_50"],
                 "profit_70": p["profit_70"],
                 "profit_100": p["profit_100"],
-                "url": f"https://www.rightmove.co.uk{prop.get('propertyUrl')}",
-                "image_url": image_url
+                "image_url": image_url,
             }
             results.append(listing)
         except Exception:
             continue
     return results
 
-async def scrape_once(seen_ids: Set[str]):
-    new_listings = []
-    for area, cfg in AREAS.items():
-        for loc_id in cfg["location_ids"]:
-            print(f"📍 Searching {area} ({loc_id})…")
-            raw = fetch_properties(loc_id)
-            filtered = filter_properties(raw, area, loc_id)
-            for listing in filtered:
-                if listing["id"] in seen_ids:
-                    continue
-                seen_ids.add(listing["id"])
-                new_listings.append(listing)
-    return new_listings
+# ========= Scraper loop =========
+async def scrape_once(seen_ids: Set[str]) -> List[Dict]:
+    all_new_listings = []
+    for area, loc_id in LOCATION_IDS.items():
+        print(f"\n📍 Searching {area}…")
+        raw_props = fetch_properties(loc_id)
+        filtered = filter_properties(raw_props, area)
+        for listing in filtered:
+            if listing["id"] in seen_ids:
+                continue
+            seen_ids.add(listing["id"])
+            all_new_listings.append(listing)
+    return all_new_listings
 
-async def main():
-    print("🚀 Scraper started!")
+async def main() -> None:
+    print("🚀 Demo scraper started! (2 leads/day max)")
     seen_ids: Set[str] = set()
     while True:
         try:
-            print(f"\n⏰ Scrape at {time.strftime('%Y-%m-%d %H:%M:%S')}")
-            new_listings = await scrape_once(seen_ids)
-            if not new_listings:
-                print("ℹ️ No new listings this run.")
+            print(f"\n⏰ New scrape at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            all_new_listings = await scrape_once(seen_ids)
 
-            for listing in new_listings:
-                message = format_message(listing)
-                print(f"✅ Sending: {listing['address']} — £{listing['rent_pcm']} — {listing['bedrooms']} beds")
+            # Sort by profit_70 descending
+            all_new_listings.sort(key=lambda x: x["profit_70"], reverse=True)
+
+            extra_count = max(0, len(all_new_listings) - 2)
+            leads_to_send = all_new_listings[:2]
+
+            for idx, listing in enumerate(leads_to_send):
+                msg_text = format_whatsapp_message(listing, extra_count if idx == len(leads_to_send)-1 else 0)
+                payload = {
+                    "text": msg_text,
+                    "image_url": listing["image_url"]
+                }
+                print(f"✅ Sending lead: {listing['address']} ({listing['area']})")
                 try:
-                    requests.post(WEBHOOK_URL, json={"text": message, "image_url": listing["image_url"]}, timeout=10)
+                    requests.post(WEBHOOK_URL, json=payload, timeout=10)
                 except Exception as e:
-                    print(f"⚠️ Failed to POST: {e}")
+                    print(f"⚠️ Failed to POST to webhook: {e}")
 
-            sleep_time = 3600 + random.randint(-300, 300)
-            print(f"💤 Sleeping {sleep_time}s…")
-            await asyncio.sleep(sleep_time)
+            sleep_duration = 3600 + random.randint(-300, 300)
+            print(f"💤 Sleeping {sleep_duration} seconds…")
+            await asyncio.sleep(sleep_duration)
+
         except Exception as e:
             print(f"🔥 Error: {e}")
             await asyncio.sleep(300)
 
 if __name__ == "__main__":
     asyncio.run(main())
-
