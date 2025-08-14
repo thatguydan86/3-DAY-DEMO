@@ -64,25 +64,33 @@ def get_closest_rate(area: str, location_id: str, bedrooms: int):
 def calculate_profits(rent_pcm: int, area: str, location_id: str, bedrooms: int):
     rate_data = get_closest_rate(area, location_id, bedrooms)
     adr = rate_data["adr"]
+    occ = rate_data["occ"]
     bills = AREAS[area]["bills"]
 
-    def profit(occ: float):
-        return int(round(monthly_net_from_adr(adr, occ) - rent_pcm - bills))
+    def profit(occ_pct: float):
+        return int(round(monthly_net_from_adr(adr, occ_pct) - rent_pcm - bills))
 
     return {
         "adr": adr,
-        "occ": rate_data["occ"],
+        "occ": occ,
         "bills": bills,
         "profit_50": profit(0.50),
         "profit_70": profit(0.70),
         "profit_100": profit(1.0)
     }
 
-def format_whatsapp_message(listing: dict) -> str:
-    # Score out of 10
+def format_message(listing: dict) -> str:
     score10 = round(max(0, min(10, (listing['profit_70'] / GOOD_PROFIT_TARGET) * 10)), 1)
     avg_occ_pct = int(listing['occ'] * 100)
     tick = "✅" if listing["profit_70"] >= GOOD_PROFIT_TARGET else "❌"
+
+    disclaimer_cta = (
+        "📌 Estimate figures drawn from Booking.com, AirBnB & Property Market Intel.\n"
+        "We advise you do your own due diligence.\n\n"
+        "💡 Want exclusive property leads tailored to you?\n"
+        "We can set up your own personal feed with your exact criteria, target area, and private deals — starting from £29/month.\n"
+        "Sign up at rent-radar.co.uk or email support@rent-radar.co.uk"
+    )
 
     return (
         f"🔔 New Rent-to-SA Lead 🔵\n"
@@ -95,8 +103,7 @@ def format_whatsapp_message(listing: dict) -> str:
         f"• 70% → £{listing['profit_70']} {tick} Target £{GOOD_PROFIT_TARGET}\n"
         f"• 100% → £{listing['profit_100']}\n\n"
         f"🔗 View listing: {listing['url']}\n\n"
-        f"⚠️ Disclaimer: This is an estimated serviced accommodation projection based on average ADR & occupancy for the area. "
-        f"Figures are indicative only and should be verified before making investment decisions."
+        f"{disclaimer_cta}"
     )
 
 def fetch_properties(location_id: str, min_beds=1, max_beds=4, min_rent=750, max_rent=1200):
@@ -134,6 +141,15 @@ def filter_properties(properties: List[Dict], area: str, location_id: str):
                 continue
 
             p = calculate_profits(rent, area, location_id, beds)
+
+            # Get image URL if available
+            image_url = None
+            if "propertyImages" in prop:
+                if "mainImageSrc" in prop["propertyImages"]:
+                    image_url = prop["propertyImages"]["mainImageSrc"]
+                elif "images" in prop["propertyImages"] and len(prop["propertyImages"]["images"]) > 0:
+                    image_url = prop["propertyImages"]["images"][0].get("srcUrl")
+
             listing = {
                 "id": prop.get("id"),
                 "area": area,
@@ -148,7 +164,8 @@ def filter_properties(properties: List[Dict], area: str, location_id: str):
                 "profit_50": p["profit_50"],
                 "profit_70": p["profit_70"],
                 "profit_100": p["profit_100"],
-                "url": f"https://www.rightmove.co.uk{prop.get('propertyUrl')}"
+                "url": f"https://www.rightmove.co.uk{prop.get('propertyUrl')}",
+                "image_url": image_url
             }
             results.append(listing)
         except Exception:
@@ -180,10 +197,10 @@ async def main():
                 print("ℹ️ No new listings this run.")
 
             for listing in new_listings:
-                message = format_whatsapp_message(listing)
+                message = format_message(listing)
                 print(f"✅ Sending: {listing['address']} — £{listing['rent_pcm']} — {listing['bedrooms']} beds")
                 try:
-                    requests.post(WEBHOOK_URL, json={"text": message}, timeout=10)
+                    requests.post(WEBHOOK_URL, json={"text": message, "image_url": listing["image_url"]}, timeout=10)
                 except Exception as e:
                     print(f"⚠️ Failed to POST: {e}")
 
@@ -196,3 +213,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
