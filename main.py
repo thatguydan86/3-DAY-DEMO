@@ -31,13 +31,14 @@ ACTIVE_HOURS = 14  # spread sends across 14 hours
 
 # Bills per area & bedroom count
 BILLS_PER_AREA: Dict[str, Dict[int, int]] = {
-    "FY1": {2: 587, 3: 645},
-    "FY2": {2: 590, 3: 648},
-    "PL1": {1: 512, 2: 590},
-    "PL4": {1: 500, 2: 575},
-    "LL30": {3: 620, 4: 690},
-    "LL31": {3: 625, 4: 695},
+    "FY1": {1: 560, 2: 587, 3: 645, 4: 700},
+    "FY2": {1: 562, 2: 590, 3: 648, 4: 705},
+    "PL1": {1: 512, 2: 590, 3: 650, 4: 710},
+    "PL4": {1: 500, 2: 575, 3: 640, 4: 700},
+    "LL30": {1: 580, 2: 600, 3: 620, 4: 690},
+    "LL31": {1: 582, 2: 605, 3: 625, 4: 695},
 }
+
 
 # ADR & Occupancy defaults
 NIGHTLY_RATES: Dict[str, Dict[int, float]] = {
