@@ -30,26 +30,25 @@ BOOKING_FEE_PCT = 0.15
 DAILY_SEND_LIMIT = 2  # Max leads sent per day in demo mode
 
 # Bills per area (Council tax + utilities + broadband + TV licence)
-BILLS_PER_AREA: Dict[str, Dict[int, int]] = {
-    "FY1": {2: 585, 3: 610},
-    "FY2": {2: 585, 3: 610},
-    "PL1": {1: 560, 2: 585},
-    "PL4": {1: 560, 2: 585},
-    "LL30": {3: 620, 4: 645},
-    "LL31": {3: 620, 4: 645},
+BILLS_PER_AREA: Dict[str, int] = {
+    "FY1": 587,
+    "FY2": 612,
+    "PL1": 598,
+    "PL4": 605,
+    "LL30": 615,
+    "LL31": 621,
 }
 
-# ADR (average nightly rate)
+# ADR & Occupancy defaults
 NIGHTLY_RATES: Dict[str, Dict[int, float]] = {
-    "FY1": {2: 125, 3: 145},
-    "FY2": {2: 125, 3: 145},
-    "PL1": {1: 95, 2: 130},
-    "PL4": {1: 96, 2: 120},
-    "LL30": {3: 167, 4: 272},
-    "LL31": {3: 167, 4: 272},
+    "FY1": {2: 125.0, 3: 145.0},
+    "FY2": {2: 125.0, 3: 145.0},
+    "PL1": {1: 95.0, 2: 130.0},
+    "PL4": {1: 96.0, 2: 120.0},
+    "LL30": {3: 167.0, 4: 272.0},
+    "LL31": {3: 167.0, 4: 272.0},
 }
 
-# Average occupancy
 OCCUPANCY: Dict[str, Dict[int, float]] = {
     "FY1": {2: 0.50, 3: 0.51},
     "FY2": {2: 0.50, 3: 0.51},
@@ -74,9 +73,9 @@ def monthly_net_from_adr(adr: float, occ: float) -> float:
     return gross * (1 - BOOKING_FEE_PCT)
 
 def calculate_profits(rent_pcm: int, area: str, beds: int):
-    nightly_rate = NIGHTLY_RATES.get(area, {}).get(beds, 100)
+    nightly_rate = NIGHTLY_RATES.get(area, {}).get(beds, 100.0)
     occ_rate = OCCUPANCY.get(area, {}).get(beds, 0.65)
-    total_bills = BILLS_PER_AREA.get(area, {}).get(beds, 600)
+    total_bills = BILLS_PER_AREA.get(area, 600)
 
     def profit(occ: float) -> int:
         net_income = monthly_net_from_adr(nightly_rate, occ)
@@ -99,7 +98,7 @@ def is_hmo_or_room(listing: Dict) -> bool:
     ]
     return any(keyword in text for text in text_fields for keyword in HMO_KEYWORDS)
 
-# ========= Rightmove fetch =========
+# ========= Rightmove fetch with retries =========
 def fetch_properties(location_id: str) -> List[Dict]:
     params = {
         "locationIdentifier": location_id,
@@ -118,15 +117,28 @@ def fetch_properties(location_id: str) -> List[Dict]:
         "_includeLetAgreed": "on",
     }
     url = "https://www.rightmove.co.uk/api/_search"
-    try:
-        resp = requests.get(url, params=params, timeout=30)
-        if resp.status_code != 200:
-            print(f"⚠️ API request failed: {resp.status_code} for {location_id}")
-            return []
-        return resp.json().get("properties", [])
-    except Exception as e:
-        print(f"⚠️ Exception fetching properties: {e}")
-        return []
+
+    retries = 3
+    for attempt in range(retries):
+        try:
+            headers = {
+                "User-Agent": random.choice([
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127 Safari/537.36",
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
+                ])
+            }
+            resp = requests.get(url, params=params, headers=headers, timeout=30)
+            if resp.status_code == 200:
+                return resp.json().get("properties", [])
+            else:
+                print(f"⚠️ API request failed ({resp.status_code}) for {location_id} – retry {attempt+1}/{retries}")
+        except Exception as e:
+            print(f"⚠️ Exception fetching properties for {location_id} – retry {attempt+1}/{retries}: {e}")
+        time.sleep(3 + attempt * 2)
+
+    print(f"❌ Giving up on {location_id} after {retries} attempts")
+    return []
 
 # ========= Filter =========
 def filter_properties(properties: List[Dict], area: str, seen_ids: Set[str]) -> List[Dict]:
@@ -202,6 +214,9 @@ async def scrape_once(seen_ids: Set[str], sent_today: int) -> int:
                 new_sent_count += 1
             except Exception as e:
                 print(f"⚠️ Failed to POST to webhook: {e}")
+
+        await asyncio.sleep(random.uniform(1, 2))  # Small delay between areas
+
     return new_sent_count
 
 async def main() -> None:
