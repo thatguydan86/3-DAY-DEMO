@@ -1,146 +1,178 @@
 import asyncio
-from playwright.async_api import async_playwright
+import time
+import random
 import requests
-from datetime import datetime
-import re
+from typing import Dict, List, Set
 
-# Search areas and URLs
-search_urls = {
-    "FY1": "YOUR_RIGHTMOVE_URL",
-    "FY2": "YOUR_RIGHTMOVE_URL",
-    "PL1": "YOUR_RIGHTMOVE_URL",
-    "PL4": "YOUR_RIGHTMOVE_URL",
-    "LL30": "YOUR_RIGHTMOVE_URL",
-    "LL31": "YOUR_RIGHTMOVE_URL"
+print("🚀 Starting RentRadar DEMO…")
+
+# ========= Config =========
+WEBHOOK_URL = "https://hook.eu2.make.com/m4n56tg2c1txony43nlyjrrsykkf7ij4"
+
+LOCATION_IDS: Dict[str, str] = {
+    "FY1": "OUTCODE^915",
+    "FY2": "OUTCODE^916",
+    "PL1": "OUTCODE^2054",
+    "PL4": "OUTCODE^2083",
+    "LL30": "OUTCODE^1464",
+    "LL31": "OUTCODE^1465",
 }
 
-# ADR & occupancy mapping
-adr_mapping = {
+# Area-specific bills
+BILLS_PER_AREA: Dict[str, int] = {
+    "FY1": 600,
+    "FY2": 600,
+    "PL1": 600,
+    "PL4": 600,
+    "LL30": 600,
+    "LL31": 600,
+}
+
+# ADR per area
+NIGHTLY_RATES: Dict[str, int] = {
     "FY1": 125,
     "FY2": 125,
     "PL1": 130,
     "PL4": 120,
     "LL30": 100,
-    "LL31": 100
+    "LL31": 100,
 }
 
-occ_mapping = {
-    "FY1": 0.60,
-    "FY2": 0.60,
-    "PL1": 0.68,
-    "PL4": 0.65,
-    "LL30": 0.60,
-    "LL31": 0.60
+# Occupancy per area (now as whole percentages)
+OCCUPANCY_RATES: Dict[str, int] = {
+    "FY1": 60,
+    "FY2": 60,
+    "PL1": 68,
+    "PL4": 65,
+    "LL30": 60,
+    "LL31": 60,
 }
 
-# Duplicate tracker
-sent_ids = set()
+BOOKING_FEE_PCT = 0.15
+GOOD_PROFIT_TARGET = 1200
 
-# Telegram webhook URL
-make_webhook_url = "https://hook.eu2.make.com/m4n56tg2c1txony43nlyjrrsykkf7ij4"
+# ========= Helpers =========
+def monthly_net_from_adr(adr: float, occ_percent: int) -> float:
+    occ = occ_percent / 100  # Convert back to decimal for calc
+    gross = adr * occ * 30
+    return gross * (1 - BOOKING_FEE_PCT)
 
-# Filter keywords
-exclude_keywords = ["HMO", "House share", "Flat share", "Room to rent", "Shared accommodation"]
+def calculate_profits(rent_pcm: int, area: str):
+    nightly_rate = NIGHTLY_RATES.get(area, 100)
+    total_bills = BILLS_PER_AREA.get(area, 600)
+    occ_percent = OCCUPANCY_RATES.get(area, 60)
 
-async def scrape_area(page, area, url):
-    print(f"📍 Searching {area}…")
-    await page.goto(url)
-    await page.wait_for_selector("div[data-test='propertyCard']", timeout=10000)
-    cards = await page.query_selector_all("div[data-test='propertyCard']")
+    def profit(occ_percent: int) -> int:
+        net_income = monthly_net_from_adr(nightly_rate, occ_percent)
+        return int(round(net_income - rent_pcm - total_bills))
 
-    if not cards:
-        print(f"⚠️ No properties found for {area}.")
-        return
+    return {
+        "night_rate": nightly_rate,
+        "occ_percent": occ_percent,
+        "total_bills": total_bills,
+        "profit_50": profit(50),
+        "profit_70": profit(70),
+        "profit_100": profit(100),
+    }
 
-    found_count = 0
-    sent_count = 0
-    skipped_duplicates = 0
-    skipped_keywords = 0
+# ========= Rightmove fetch =========
+def fetch_properties(location_id: str) -> List[Dict]:
+    params = {
+        "locationIdentifier": location_id,
+        "numberOfPropertiesPerPage": 24,
+        "radius": 0.0,
+        "index": 0,
+        "channel": "RENT",
+        "currencyCode": "GBP",
+        "sortType": 6,
+        "viewType": "LIST",
+        "_includeLetAgreed": "on",
+    }
+    url = "https://www.rightmove.co.uk/api/_search"
+    try:
+        resp = requests.get(url, params=params, timeout=30)
+        if resp.status_code != 200:
+            print(f"⚠️ API request failed: {resp.status_code} for {location_id}")
+            return []
+        return resp.json().get("properties", [])
+    except Exception as e:
+        print(f"⚠️ Exception fetching properties: {e}")
+        return []
 
-    for card in cards:
-        found_count += 1
+# ========= Filter =========
+def filter_properties(properties: List[Dict], area: str) -> List[Dict]:
+    results = []
+    for prop in properties:
+        try:
+            prop_type = (prop.get("propertySubType") or "").lower()
+            if any(kw in prop_type for kw in ["hmo", "house share", "flat share", "room to rent", "shared accommodation"]):
+                continue
 
-        # Extract Rightmove property ID
-        link_el = await card.query_selector("a[data-test='propertyCard-link']")
-        href = await link_el.get_attribute("href") if link_el else ""
-        property_id_match = re.search(r"/(\d+)", href or "")
-        property_id = property_id_match.group(1) if property_id_match else None
+            rent = prop.get("price", {}).get("amount")
+            if not rent:
+                continue
 
-        if not property_id or property_id in sent_ids:
-            skipped_duplicates += 1
+            p = calculate_profits(rent, area)
+            p70 = p["profit_70"]
+
+            score10 = round(max(0, min(10, (p70 / GOOD_PROFIT_TARGET) * 10)), 1)
+            rag = "🟢" if p70 >= GOOD_PROFIT_TARGET else ("🟡" if p70 >= GOOD_PROFIT_TARGET * 0.7 else "🔴")
+
+            listing = {
+                "id": prop.get("id"),
+                "area": area,
+                "address": prop.get("displayAddress", "Unknown"),
+                "rent_pcm": rent,
+                "night_rate": p["night_rate"],
+                "occ_percent": p["occ_percent"],  # already a whole number now
+                "bills": p["total_bills"],
+                "profit_50": p["profit_50"],
+                "profit_70": p["profit_70"],
+                "profit_100": p["profit_100"],
+                "target_profit_70": GOOD_PROFIT_TARGET,
+                "score10": score10,
+                "rag": rag,
+                "url": f"https://www.rightmove.co.uk{prop.get('propertyUrl')}",
+            }
+            results.append(listing)
+        except Exception:
             continue
+    return results
 
-        # Extract title for keyword filtering
-        title_el = await card.query_selector("h2")
-        title = (await title_el.inner_text()).strip() if title_el else ""
+# ========= Scraper loop =========
+async def scrape_once(seen_ids: Set[str]) -> List[Dict]:
+    new_listings = []
+    for area, loc_id in LOCATION_IDS.items():
+        print(f"\n📍 Searching {area}…")
+        raw_props = fetch_properties(loc_id)
+        filtered = filter_properties(raw_props, area)
+        for listing in filtered:
+            if listing["id"] in seen_ids:
+                continue
+            seen_ids.add(listing["id"])
+            new_listings.append(listing)
+    return new_listings
 
-        if any(kw.lower() in title.lower() for kw in exclude_keywords):
-            skipped_keywords += 1
-            continue
-
-        # Extract price
-        price_el = await card.query_selector("div[data-test='propertyCard-priceValue']")
-        price_text = (await price_el.inner_text()).strip() if price_el else ""
-        price_match = re.search(r"£([\d,]+)", price_text)
-        rent_pcm = int(price_match.group(1).replace(",", "")) if price_match else 0
-
-        # Extract bedrooms
-        bed_el = await card.query_selector("h2")
-        bed_text = (await bed_el.inner_text()).strip() if bed_el else ""
-        bed_match = re.search(r"(\d+)\s*-?bed", bed_text, re.IGNORECASE)
-        bedrooms = int(bed_match.group(1)) if bed_match else None
-
-        # Profit calculations
-        adr = adr_mapping.get(area, 100)
-        occ_rate = occ_mapping.get(area, 0.6)
-        occ_display = int(occ_rate * 100)  # Show as whole number %
-
-        bills = 600
-        fees_pct = 0.15
-        monthly_income = adr * 30 * occ_rate
-        profit_50 = int(adr * 30 * 0.5 - rent_pcm - bills - (adr * 30 * 0.5 * fees_pct))
-        profit_70 = int(adr * 30 * 0.7 - rent_pcm - bills - (adr * 30 * 0.7 * fees_pct))
-        profit_100 = int(adr * 30 * 1.0 - rent_pcm - bills - (adr * 30 * 1.0 * fees_pct))
-
-        # Send to Make webhook
-        payload = {
-            "id": property_id,
-            "area": area,
-            "address": title,
-            "rent_pcm": rent_pcm,
-            "bedrooms": bedrooms,
-            "night_rate": adr,
-            "occ_rate": occ_display,
-            "bills": bills,
-            "profit_50": profit_50,
-            "profit_70": profit_70,
-            "profit_100": profit_100,
-            "target_profit_70": 1200,
-            "score10": 10,
-            "rag": "🟢",
-            "url": f"https://www.rightmove.co.uk/properties/{property_id}"
-        }
-        requests.post(make_webhook_url, json=payload)
-        sent_ids.add(property_id)
-        sent_count += 1
-
-    print(f"✅ {area}: Found {found_count}, Sent {sent_count}, Skipped duplicates {skipped_duplicates}, Skipped keywords {skipped_keywords}")
-
-async def main():
-    print("🚀 Starting RentRadar…\n")
+async def main() -> None:
+    print("🚀 Scraper started in DEMO mode!")
+    seen_ids: Set[str] = set()
     while True:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
+        print(f"\n⏰ New scrape at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        new_listings = await scrape_once(seen_ids)
 
-            for area, url in search_urls.items():
-                await scrape_area(page, area, url)
+        if not new_listings:
+            print("ℹ️ No new listings this run.")
 
-            await browser.close()
+        for listing in new_listings:
+            print(f"✅ Sending: {listing['address']} – £{listing['rent_pcm']} – ADR £{listing['night_rate']} – Occ {listing['occ_percent']}%")
+            try:
+                requests.post(WEBHOOK_URL, json=listing, timeout=10)
+            except Exception as e:
+                print(f"⚠️ Failed to POST to webhook: {e}")
 
-        sleep_time = 3600  # 1 hour
-        print(f"💤 Sleeping {sleep_time} seconds…\n")
-        await asyncio.sleep(sleep_time)
+        sleep_duration = 3600 + random.randint(-300, 300)
+        print(f"💤 Sleeping {sleep_duration} seconds…")
+        await asyncio.sleep(sleep_duration)
 
 if __name__ == "__main__":
     asyncio.run(main())
