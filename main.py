@@ -7,8 +7,9 @@ from typing import Dict, List, Set
 print("🚀 Starting RentRadar DEMO…")
 
 # ========= Config =========
-WEBHOOK_URL = "https://hook.eu2.make.com/m4n56tg2c1txony43nlyjrrsykkf7ij4"
+WEBHOOK_URL = "https://hook.eu2.make.com/yhupboymwhht7vggrp27wlqjs4sn4886"
 
+# Search locations and Rightmove location IDs
 LOCATION_IDS: Dict[str, str] = {
     "FY1": "OUTCODE^915",
     "FY2": "OUTCODE^916",
@@ -18,95 +19,84 @@ LOCATION_IDS: Dict[str, str] = {
     "LL31": "OUTCODE^1465",
 }
 
+# Bedrooms
 MIN_BEDS = 1
 MAX_BEDS = 4
-MIN_RENT = 500
-MAX_PRICE = 1500
+MIN_BATHS = 0
+MIN_RENT = 300
+MAX_PRICE = 1200
 GOOD_PROFIT_TARGET = 1200
 BOOKING_FEE_PCT = 0.15
+DAILY_SEND_LIMIT = 2  # Max leads sent per day in demo mode
 
-# Bills per area (monthly)
-BILLS_TABLE = {
-    ("FY1", 2): 395,
-    ("FY1", 3): 395,
-    ("FY2", 2): 395,
-    ("FY2", 3): 395,
-    ("PL1", 1): 420,
-    ("PL1", 2): 420,
-    ("PL4", 1): 420,
-    ("PL4", 2): 420,
-    ("LL30", 3): 380,
-    ("LL30", 4): 380,
-    ("LL31", 3): 380,
-    ("LL31", 4): 380,
+# Bills per area
+BILLS_PER_AREA: Dict[str, int] = {
+    "FY1": 600,
+    "FY2": 600,
+    "PL1": 600,
+    "PL4": 600,
+    "LL30": 600,
+    "LL31": 600,
 }
 
-# ADR table
-ADR_TABLE = {
-    ("FY1", 2): 125, ("FY1", 3): 145,
-    ("FY2", 2): 125, ("FY2", 3): 145,
-    ("PL1", 1): 95,  ("PL1", 2): 130,
-    ("PL4", 1): 96,  ("PL4", 2): 120,
-    ("LL30", 3): 167, ("LL30", 4): 272,
-    ("LL31", 3): 167, ("LL31", 4): 272,
+# ADR & Occupancy defaults
+NIGHTLY_RATES: Dict[str, Dict[int, float]] = {
+    "FY1": {2: 125, 3: 145},
+    "FY2": {2: 125, 3: 145},
+    "PL1": {1: 95, 2: 130},
+    "PL4": {1: 96, 2: 120},
+    "LL30": {3: 167, 4: 272},
+    "LL31": {3: 167, 4: 272},
 }
 
-# Average occupancy %
-OCC_TABLE = {
-    ("FY1", 2): 50, ("FY1", 3): 51,
-    ("FY2", 2): 50, ("FY2", 3): 51,
-    ("PL1", 1): 67, ("PL1", 2): 68,
-    ("PL4", 1): 64, ("PL4", 2): 65,
-    ("LL30", 3): 63, ("LL30", 4): 61,
-    ("LL31", 3): 63, ("LL31", 4): 61,
+OCCUPANCY: Dict[str, Dict[int, float]] = {
+    "FY1": {2: 0.50, 3: 0.51},
+    "FY2": {2: 0.50, 3: 0.51},
+    "PL1": {1: 0.67, 2: 0.68},
+    "PL4": {1: 0.64, 2: 0.65},
+    "LL30": {3: 0.63, 4: 0.61},
+    "LL31": {3: 0.63, 4: 0.61},
 }
+
+# Keywords to skip HMOs / room lets
+HMO_KEYWORDS = [
+    "hmo", "flat share", "house share", "room to rent",
+    "room in", "room only", "shared accommodation", "lodger",
+    "single room", "double room", "student accommodation"
+]
+
+print("✅ Config loaded")
 
 # ========= Helpers =========
-def monthly_net_from_adr(adr: float, occ_percent: float) -> float:
-    gross = adr * (occ_percent / 100) * 30
+def monthly_net_from_adr(adr: float, occ: float) -> float:
+    gross = adr * occ * 30
     return gross * (1 - BOOKING_FEE_PCT)
 
 def calculate_profits(rent_pcm: int, area: str, beds: int):
-    nightly_rate = ADR_TABLE.get((area, beds), 100)
-    avg_occ = OCC_TABLE.get((area, beds), 60)
-    total_bills = BILLS_TABLE.get((area, beds), 400)
+    nightly_rate = NIGHTLY_RATES.get(area, {}).get(beds, 100)
+    occ_rate = OCCUPANCY.get(area, {}).get(beds, 0.65)
+    total_bills = BILLS_PER_AREA.get(area, 600)
 
-    def profit(occ_percent: float) -> int:
-        net_income = monthly_net_from_adr(nightly_rate, occ_percent)
+    def profit(occ: float) -> int:
+        net_income = monthly_net_from_adr(nightly_rate, occ)
         return int(round(net_income - rent_pcm - total_bills))
 
     return {
         "night_rate": nightly_rate,
-        "avg_occ": avg_occ,
+        "occ_rate": occ_rate,
         "total_bills": total_bills,
-        "profit_50": profit(50),
-        "profit_70": profit(70),
-        "profit_100": profit(100),
+        "profit_50": profit(0.5),
+        "profit_70": profit(0.7),
+        "profit_100": profit(1.0),
     }
 
-def format_message(listing: Dict):
-    tick = "✅" if listing["profit_70"] >= GOOD_PROFIT_TARGET else ""
-    return f"""📢 New Rent-to-SA Lead 🔵
-Score: {listing['score10']}/10
-
-📍 {listing['address']} — {listing['area']}
-🏡 {listing['bedrooms']}-bed {listing['propertySubType']} | 🛁 {listing['bathrooms']} baths
-💰 Rent: £{listing['rent_pcm']}/mo | 📊 Bills: £{listing['bills']}/mo | 📄 Fees: {int(BOOKING_FEE_PCT*100)}%
-
-💵 Profit (ADR £{listing['night_rate']} / Avg Occ: {listing['avg_occ']}%)
-• 50% → £{listing['profit_50']}
-• 70% → £{listing['profit_70']} {tick} Target £{GOOD_PROFIT_TARGET}
-• 100% → £{listing['profit_100']}
-
-🔗 View listing: {listing['url']}
-
-📌 Estimate figures drawn from Booking.com, AirBnB & Property Market Intel.
-We advise you do your own due diligence.
-
-💡 Want exclusive property leads tailored to you?
-We can set up your own personal feed with your exact criteria, target area, and private deals — starting from £29/month.
-Sign up at rent-radar.co.uk or email support@rent-radar.co.uk
-"""
+def is_hmo_or_room(listing: Dict) -> bool:
+    text_fields = [
+        listing.get("displayAddress", "").lower(),
+        listing.get("summary", "").lower(),
+        listing.get("propertySubType", "").lower()
+    ]
+    return any(keyword in text for text in text_fields for keyword in HMO_KEYWORDS)
 
 # ========= Rightmove fetch =========
 def fetch_properties(location_id: str) -> List[Dict]:
@@ -121,6 +111,7 @@ def fetch_properties(location_id: str) -> List[Dict]:
         "viewType": "LIST",
         "minBedrooms": MIN_BEDS,
         "maxBedrooms": MAX_BEDS,
+        "minBathrooms": MIN_BATHS,
         "minPrice": MIN_RENT,
         "maxPrice": MAX_PRICE,
         "_includeLetAgreed": "on",
@@ -137,78 +128,97 @@ def fetch_properties(location_id: str) -> List[Dict]:
         return []
 
 # ========= Filter =========
-def filter_properties(properties: List[Dict], area: str) -> List[Dict]:
+def filter_properties(properties: List[Dict], area: str, seen_ids: Set[str]) -> List[Dict]:
     results = []
     for prop in properties:
         try:
+            prop_id = prop.get("id")
+            address = prop.get("displayAddress", "Unknown")
             beds = prop.get("bedrooms")
             rent = prop.get("price", {}).get("amount")
-            baths = prop.get("bathrooms") or 0
-            subtype = (prop.get("propertySubType") or "House").title()
-            address = prop.get("displayAddress", "Unknown")
 
             if not beds or not rent:
                 continue
-            if rent < MIN_RENT or rent > MAX_PRICE:
+
+            if prop_id in seen_ids:
+                print(f"⏩ SKIPPED DUPLICATE: {address}")
+                continue
+
+            if is_hmo_or_room(prop):
+                print(f"🚫 SKIPPED HMO/ROOM: {address}")
                 continue
 
             p = calculate_profits(rent, area, beds)
             p70 = p["profit_70"]
 
             score10 = round(max(0, min(10, (p70 / GOOD_PROFIT_TARGET) * 10)), 1)
+            rag = "🟢" if p70 >= GOOD_PROFIT_TARGET else ("🟡" if p70 >= GOOD_PROFIT_TARGET * 0.7 else "🔴")
+
             listing = {
-                "id": prop.get("id"),
+                "id": prop_id,
                 "area": area,
                 "address": address,
                 "rent_pcm": rent,
                 "bedrooms": beds,
-                "bathrooms": baths,
-                "propertySubType": subtype,
-                "url": f"https://www.rightmove.co.uk{prop.get('propertyUrl')}",
                 "night_rate": p["night_rate"],
-                "avg_occ": p["avg_occ"],
+                "occ_rate": p["occ_rate"],
                 "bills": p["total_bills"],
                 "profit_50": p["profit_50"],
                 "profit_70": p70,
                 "profit_100": p["profit_100"],
-                "score10": score10
+                "target_profit_70": GOOD_PROFIT_TARGET,
+                "score10": score10,
+                "rag": rag,
+                "url": f"https://www.rightmove.co.uk{prop.get('propertyUrl')}",
             }
             results.append(listing)
-        except Exception:
+
+        except Exception as e:
+            print(f"⚠️ Error filtering property: {e}")
             continue
     return results
 
 # ========= Scraper loop =========
-async def scrape_once(seen_ids: Set[str]) -> List[Dict]:
-    new_listings = []
+async def scrape_once(seen_ids: Set[str], sent_today: int) -> int:
+    new_sent_count = sent_today
     for area, loc_id in LOCATION_IDS.items():
         print(f"\n📍 Searching {area}…")
         raw_props = fetch_properties(loc_id)
-        filtered = filter_properties(raw_props, area)
+        filtered = filter_properties(raw_props, area, seen_ids)
+
+        if not filtered:
+            print(f"❌ NO PROPERTIES FOUND for {area}")
+            continue
+
         for listing in filtered:
-            if listing["id"] in seen_ids:
-                continue
+            if new_sent_count >= DAILY_SEND_LIMIT:
+                return new_sent_count
+
             seen_ids.add(listing["id"])
-            new_listings.append(listing)
-    return new_listings
+            print(f"📤 SENT PROPERTY: {listing['address']} – £{listing['rent_pcm']} – {listing['bedrooms']} beds")
+            try:
+                requests.post(WEBHOOK_URL, json=listing, timeout=10)
+                new_sent_count += 1
+            except Exception as e:
+                print(f"⚠️ Failed to POST to webhook: {e}")
+    return new_sent_count
 
 async def main() -> None:
     print("🚀 Scraper started in DEMO mode!")
     seen_ids: Set[str] = set()
+    sent_today = 0
+    last_reset_day = time.strftime("%Y-%m-%d")
+
     while True:
         try:
+            current_day = time.strftime("%Y-%m-%d")
+            if current_day != last_reset_day:
+                sent_today = 0
+                last_reset_day = current_day
+                print(f"\n🔄 Daily send counter reset for {current_day}")
+
             print(f"\n⏰ New scrape at {time.strftime('%Y-%m-%d %H:%M:%S')}")
-            new_listings = await scrape_once(seen_ids)
-
-            if not new_listings:
-                print("ℹ️ No new listings this run.")
-
-            for listing in new_listings:
-                msg = format_message(listing)
-                try:
-                    requests.post(WEBHOOK_URL, json={"text": msg}, timeout=10)
-                except Exception as e:
-                    print(f"⚠️ Failed to POST to webhook: {e}")
+            sent_today = await scrape_once(seen_ids, sent_today)
 
             sleep_duration = 3600 + random.randint(-300, 300)
             print(f"💤 Sleeping {sleep_duration} seconds…")
