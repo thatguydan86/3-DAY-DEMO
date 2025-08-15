@@ -7,9 +7,8 @@ from typing import Dict, List, Set
 print("🚀 Starting RentRadar DEMO…")
 
 # ========= Config =========
-WEBHOOK_URL = "https://hook.eu2.make.com/yhupboymwhht7vggrp27wlqjs4sn4886"
+WEBHOOK_URL = "https://hook.eu2.make.com/m4n56tg2c1txony43nlyjrrsykkf7ij4"
 
-# Search locations and Rightmove location IDs
 LOCATION_IDS: Dict[str, str] = {
     "FY1": "OUTCODE^915",
     "FY2": "OUTCODE^916",
@@ -19,7 +18,6 @@ LOCATION_IDS: Dict[str, str] = {
     "LL31": "OUTCODE^1465",
 }
 
-# Bedrooms
 MIN_BEDS = 1
 MAX_BEDS = 4
 MIN_BATHS = 0
@@ -27,19 +25,12 @@ MIN_RENT = 300
 MAX_PRICE = 1200
 GOOD_PROFIT_TARGET = 1200
 BOOKING_FEE_PCT = 0.15
-DAILY_SEND_LIMIT = 2  # Max leads sent per day in demo mode
+DAILY_SEND_LIMIT = 2
 
-# Bills per area
 BILLS_PER_AREA: Dict[str, int] = {
-    "FY1": 600,
-    "FY2": 600,
-    "PL1": 600,
-    "PL4": 600,
-    "LL30": 600,
-    "LL31": 600,
+    "FY1": 600, "FY2": 600, "PL1": 600, "PL4": 600, "LL30": 600, "LL31": 600,
 }
 
-# ADR & Occupancy defaults
 NIGHTLY_RATES: Dict[str, Dict[int, float]] = {
     "FY1": {2: 125, 3: 145},
     "FY2": {2: 125, 3: 145},
@@ -50,31 +41,31 @@ NIGHTLY_RATES: Dict[str, Dict[int, float]] = {
 }
 
 OCCUPANCY: Dict[str, Dict[int, float]] = {
-    "FY1": {2: 0.50, 3: 0.51},
-    "FY2": {2: 0.50, 3: 0.51},
-    "PL1": {1: 0.67, 2: 0.68},
-    "PL4": {1: 0.64, 2: 0.65},
-    "LL30": {3: 0.63, 4: 0.61},
-    "LL31": {3: 0.63, 4: 0.61},
+    "FY1": {2: 50, 3: 51},
+    "FY2": {2: 50, 3: 51},
+    "PL1": {1: 67, 2: 68},
+    "PL4": {1: 64, 2: 65},
+    "LL30": {3: 63, 4: 61},
+    "LL31": {3: 63, 4: 61},
 }
 
-# Keywords to skip HMOs / room lets
 HMO_KEYWORDS = [
-    "hmo", "flat share", "house share", "room to rent",
-    "room in", "room only", "shared accommodation", "lodger",
-    "single room", "double room", "student accommodation"
+    "hmo", "flat share", "house share", "room to rent", "room in",
+    "room only", "shared accommodation", "lodger", "single room",
+    "double room", "student accommodation"
 ]
 
 print("✅ Config loaded")
 
 # ========= Helpers =========
-def monthly_net_from_adr(adr: float, occ: float) -> float:
+def monthly_net_from_adr(adr: float, occ_percent: float) -> float:
+    occ = occ_percent / 100
     gross = adr * occ * 30
     return gross * (1 - BOOKING_FEE_PCT)
 
 def calculate_profits(rent_pcm: int, area: str, beds: int):
     nightly_rate = NIGHTLY_RATES.get(area, {}).get(beds, 100)
-    occ_rate = OCCUPANCY.get(area, {}).get(beds, 0.65)
+    occ_rate = OCCUPANCY.get(area, {}).get(beds, 65)
     total_bills = BILLS_PER_AREA.get(area, 600)
 
     def profit(occ: float) -> int:
@@ -83,11 +74,11 @@ def calculate_profits(rent_pcm: int, area: str, beds: int):
 
     return {
         "night_rate": nightly_rate,
-        "occ_rate": int(round(occ_rate * 100)),  # Send as percentage
+        "occ_rate": occ_rate,
         "total_bills": total_bills,
-        "profit_50": profit(0.5),
-        "profit_70": profit(0.7),
-        "profit_100": profit(1.0),
+        "profit_50": profit(50),
+        "profit_70": profit(70),
+        "profit_100": profit(100),
     }
 
 def is_hmo_or_room(listing: Dict) -> bool:
@@ -117,15 +108,21 @@ def fetch_properties(location_id: str) -> List[Dict]:
         "_includeLetAgreed": "on",
     }
     url = "https://www.rightmove.co.uk/api/_search"
-    try:
-        resp = requests.get(url, params=params, timeout=30)
-        if resp.status_code != 200:
-            print(f"⚠️ API request failed: {resp.status_code} for {location_id}")
-            return []
-        return resp.json().get("properties", [])
-    except Exception as e:
-        print(f"⚠️ Exception fetching properties: {e}")
-        return []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
+
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=30)
+            if resp.status_code == 200:
+                return resp.json().get("properties", [])
+            else:
+                print(f"⚠️ API request failed ({resp.status_code}) for {location_id} - attempt {attempt+1}")
+        except Exception as e:
+            print(f"⚠️ Exception fetching properties for {location_id} - attempt {attempt+1}: {e}")
+        time.sleep(2)
+    return []
 
 # ========= Filter =========
 def filter_properties(properties: List[Dict], area: str, seen_ids: Set[str]) -> List[Dict]:
@@ -161,7 +158,7 @@ def filter_properties(properties: List[Dict], area: str, seen_ids: Set[str]) -> 
                 "rent_pcm": rent,
                 "bedrooms": beds,
                 "night_rate": p["night_rate"],
-                "occ_rate": p["occ_rate"],  # Now percentage
+                "occ_rate": p["occ_rate"],
                 "bills": p["total_bills"],
                 "profit_50": p["profit_50"],
                 "profit_70": p70,
