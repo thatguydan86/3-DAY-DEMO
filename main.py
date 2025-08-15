@@ -27,7 +27,7 @@ MIN_RENT = 300
 MAX_PRICE = 1200
 GOOD_PROFIT_TARGET = 1200
 BOOKING_FEE_PCT = 0.15
-DAILY_SEND_LIMIT = 2  # Max leads sent per day in demo mode
+DAILY_SEND_LIMIT = 5  # Max leads sent per day in demo mode
 
 # Bills per area (Council tax + utilities + broadband + TV licence)
 BILLS_PER_AREA: Dict[str, int] = {
