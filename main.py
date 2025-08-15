@@ -174,7 +174,7 @@ def filter_properties(properties: List[Dict], area: str, seen_ids: Set[str]) -> 
                 "rent_pcm": rent,
                 "bedrooms": beds,
                 "night_rate": p["night_rate"],
-                "occ_rate": p["occ_rate"],
+                "occ_rate": round(p["occ_rate"] * 100),
                 "bills": p["total_bills"],
                 "profit_50": p["profit_50"],
                 "profit_70": p70,
