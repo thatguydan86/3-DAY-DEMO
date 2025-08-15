@@ -19,35 +19,34 @@ LOCATION_IDS: Dict[str, str] = {
     "LL31": "OUTCODE^1465",
 }
 
-# Bedrooms
 MIN_BEDS = 1
 MAX_BEDS = 4
 MIN_BATHS = 0
 MIN_RENT = 300
 MAX_PRICE = 1300
-GOOD_PROFIT_TARGET = 950
+GOOD_PROFIT_TARGET = 950  # used for scoring AND Telegram target
 BOOKING_FEE_PCT = 0.15
-DAILY_SEND_LIMIT = 5  # Now 5 leads per day
-ACTIVE_HOURS = 14  # Spread sends across 14 hours
+DAILY_SEND_LIMIT = 5
+ACTIVE_HOURS = 14  # spread sends across 14 hours
 
 # Bills per area & bedroom count
 BILLS_PER_AREA: Dict[str, Dict[int, int]] = {
-    "FY1": {1: 520, 2: 587, 3: 645, 4: 710},
-    "FY2": {1: 522, 2: 590, 3: 648, 4: 715},
-    "PL1": {1: 500, 2: 565, 3: 628, 4: 695},
-    "PL4": {1: 498, 2: 562, 3: 625, 4: 692},
-    "LL30": {1: 530, 2: 600, 3: 670, 4: 740},
-    "LL31": {1: 528, 2: 598, 3: 668, 4: 738},
+    "FY1": {2: 587, 3: 645},
+    "FY2": {2: 590, 3: 648},
+    "PL1": {1: 512, 2: 590},
+    "PL4": {1: 500, 2: 575},
+    "LL30": {3: 620, 4: 690},
+    "LL31": {3: 625, 4: 695},
 }
 
 # ADR & Occupancy defaults
 NIGHTLY_RATES: Dict[str, Dict[int, float]] = {
     "FY1": {2: 125, 3: 145},
-    "FY2": {2: 125, 3: 145},
+    "FY2": {2: 126, 3: 146},
     "PL1": {1: 95, 2: 130},
     "PL4": {1: 96, 2: 120},
     "LL30": {3: 167, 4: 272},
-    "LL31": {3: 167, 4: 272},
+    "LL31": {3: 168, 4: 273},
 }
 
 OCCUPANCY: Dict[str, Dict[int, float]] = {
@@ -59,7 +58,6 @@ OCCUPANCY: Dict[str, Dict[int, float]] = {
     "LL31": {3: 0.63, 4: 0.61},
 }
 
-# Keywords to skip HMOs / room lets
 HMO_KEYWORDS = [
     "hmo", "flat share", "house share", "room to rent",
     "room in", "room only", "shared accommodation", "lodger",
@@ -84,11 +82,12 @@ def calculate_profits(rent_pcm: int, area: str, beds: int):
 
     return {
         "night_rate": nightly_rate,
-        "occ_rate": occ_rate,
+        "occ_rate": int(round(occ_rate * 100)),  # % format for Telegram
         "total_bills": total_bills,
         "profit_50": profit(0.5),
         "profit_70": profit(0.7),
         "profit_100": profit(1.0),
+        "target_profit_70": GOOD_PROFIT_TARGET  # now matches config
     }
 
 def is_hmo_or_room(listing: Dict) -> bool:
@@ -162,12 +161,12 @@ def filter_properties(properties: List[Dict], area: str, seen_ids: Set[str]) -> 
                 "rent_pcm": rent,
                 "bedrooms": beds,
                 "night_rate": p["night_rate"],
-                "occ_rate": p["occ_rate"] * 100,  # Show as percentage
+                "occ_rate": p["occ_rate"],
                 "bills": p["total_bills"],
                 "profit_50": p["profit_50"],
                 "profit_70": p70,
                 "profit_100": p["profit_100"],
-                "target_profit_70": GOOD_PROFIT_TARGET,
+                "target_profit_70": p["target_profit_70"],
                 "score10": score10,
                 "rag": rag,
                 "url": f"https://www.rightmove.co.uk{prop.get('propertyUrl')}",
@@ -182,6 +181,8 @@ def filter_properties(properties: List[Dict], area: str, seen_ids: Set[str]) -> 
 # ========= Scraper loop =========
 async def scrape_once(seen_ids: Set[str], sent_today: int) -> int:
     new_sent_count = sent_today
+    send_interval = (ACTIVE_HOURS * 3600) // DAILY_SEND_LIMIT
+
     for area, loc_id in LOCATION_IDS.items():
         print(f"\n📍 Searching {area}…")
         raw_props = fetch_properties(loc_id)
@@ -200,7 +201,7 @@ async def scrape_once(seen_ids: Set[str], sent_today: int) -> int:
             try:
                 requests.post(WEBHOOK_URL, json=listing, timeout=10)
                 new_sent_count += 1
-                await asyncio.sleep((ACTIVE_HOURS * 3600) / DAILY_SEND_LIMIT)  # Spread over 14 hours
+                await asyncio.sleep(send_interval)  # spread sends out
             except Exception as e:
                 print(f"⚠️ Failed to POST to webhook: {e}")
     return new_sent_count
