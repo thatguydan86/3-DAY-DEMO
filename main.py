@@ -154,23 +154,25 @@ def filter_properties(properties: List[Dict], area: str, seen_ids: Set[str]) -> 
             score10 = round(max(0, min(10, (p70 / GOOD_PROFIT_TARGET) * 10)), 1)
             rag = "🟢" if p70 >= GOOD_PROFIT_TARGET else ("🟡" if p70 >= GOOD_PROFIT_TARGET * 0.7 else "🔴")
 
-            listing = {
-                "id": prop_id,
-                "area": area,
-                "address": address,
-                "rent_pcm": rent,
-                "bedrooms": beds,
-                "night_rate": p["night_rate"],
-                "occ_rate": p["occ_rate"],
-                "bills": p["total_bills"],
-                "profit_50": p["profit_50"],
-                "profit_70": p70,
-                "profit_100": p["profit_100"],
-                "target_profit_70": p["target_profit_70"],
-                "score10": score10,
-                "rag": rag,
-                "url": f"https://www.rightmove.co.uk{prop.get('propertyUrl')}",
-            }
+     listing = {
+    "id": prop_id,
+    "area": area,
+    "address": address,
+    "rent_pcm": rent,
+    "bedrooms": beds,
+    "bathrooms": prop.get("bathrooms", 1),  # ✅ NEW LINE
+    "night_rate": p["night_rate"],
+    "occ_rate": p["occ_rate"],
+    "bills": p["total_bills"],
+    "profit_50": p["profit_50"],
+    "profit_70": p70,
+    "profit_100": p["profit_100"],
+    "target_profit_70": p["target_profit_70"],
+    "score10": score10,
+    "rag": rag,
+    "url": f"https://www.rightmove.co.uk{prop.get('propertyUrl')}",
+}
+
             results.append(listing)
 
         except Exception as e:
