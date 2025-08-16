@@ -40,14 +40,28 @@ BILLS_PER_AREA: Dict[str, Dict[int, int]] = {
 }
 
 
-# ADR & Occupancy defaults
-NIGHTLY_RATES: Dict[str, Dict[int, float]] = {
-    "FY1": {2: 125, 3: 145},
-    "FY2": {2: 126, 3: 146},
-    "PL1": {1: 95, 2: 130},
-    "PL4": {1: 96, 2: 120},
-    "LL30": {3: 167, 4: 272},
-    "LL31": {3: 168, 4: 273},
+# ADR (Average Daily Rate) and Occupancy defaults per area & bedroom count
+ADR_OCC_DEFAULTS: Dict[str, Dict[int, Dict[str, float]]] = {
+    "FY1": {
+        1: {"adr": 93, "occ": 0.53},   # From your PMI screenshot
+        2: {"adr": 110, "occ": 0.55},  # Conservative uplift for 2-bed
+        3: {"adr": 135, "occ": 0.57},  # Conservative uplift for 3-bed
+    },
+    "FY2": {
+        1: {"adr": 90, "occ": 0.52},
+        2: {"adr": 108, "occ": 0.54},
+        3: {"adr": 130, "occ": 0.56},
+    },
+    "FY3": {
+        1: {"adr": 85, "occ": 0.50},
+        2: {"adr": 105, "occ": 0.52},
+        3: {"adr": 125, "occ": 0.54},
+    },
+    "FY4": {
+        1: {"adr": 87, "occ": 0.56},   # From your screenshot
+        2: {"adr": 115, "occ": 0.58},  # Conservative uplift for 2-bed
+        3: {"adr": 140, "occ": 0.60},  # Conservative uplift for 3-bed
+    },
 }
 
 OCCUPANCY: Dict[str, Dict[int, float]] = {
