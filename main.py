@@ -160,7 +160,7 @@ def filter_properties(properties: List[Dict], area: str, seen_ids: Set[str]) -> 
     "address": address,
     "rent_pcm": rent,
     "bedrooms": beds,
-    "bathrooms": prop.get("bathrooms", 1),  # ✅ NEW LINE
+    "bathrooms": bathrooms,
     "night_rate": p["night_rate"],
     "occ_rate": p["occ_rate"],
     "bills": p["total_bills"],
