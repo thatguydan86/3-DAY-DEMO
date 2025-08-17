@@ -7,15 +7,26 @@ import logging
 from typing import Dict, List, Set, Optional
 
 # Telegram (async)
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 
 print("🚀 Starting RentRadar DEMO…")
 
 # ========= Env / Config =========
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://hook.eu2.make.com/m4n56tg2c1txony43nlyjrrsykkf7ij4").strip()
-TELEGRAM_BOT_TOKEN = os.getenv("8414219699:AAGOkFFDGEwlkxC8dsXXo0Wujt6c-ssMUVM", "").strip()
+WEBHOOK_URL = os.getenv(
+    "WEBHOOK_URL",
+    "https://hook.eu2.make.com/m4n56tg2c1txony43nlyjrrsykkf7ij4"
+).strip()
+
+# Use env var if present; otherwise fall back to your token string
+TELEGRAM_BOT_TOKEN = os.getenv(
+    "TELEGRAM_BOT_TOKEN",
+    "8414219699:AAGOkFFDGEwlkxC8dsXXo0Wujt6c-ssMUVM"
+).strip()
+
+# Toggle scraper (set to False if you only want ID capture)
+RUN_SCRAPER = True
 
 # Search locations and Rightmove location IDs
 LOCATION_IDS: Dict[str, str] = {
@@ -150,8 +161,13 @@ def fetch_properties(location_id: str) -> List[Dict]:
         "_includeLetAgreed": "on",
     }
     url = "https://www.rightmove.co.uk/api/_search"
+    headers = {
+        # Helps reduce HTTP 403s
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    }
     try:
-        resp = requests.get(url, params=params, timeout=30)
+        resp = requests.get(url, params=params, headers=headers, timeout=30)
         if resp.status_code != 200:
             print(f"⚠️ API request failed: {resp.status_code} for {location_id}")
             return []
@@ -188,6 +204,7 @@ def filter_properties(properties: List[Dict], area: str, seen_ids: Set[str]) -> 
             score10 = round(max(0, min(10, (p70 / GOOD_PROFIT_TARGET) * 10)), 1)
             rag = "🟢" if p70 >= GOOD_PROFIT_TARGET else ("🟡" if p70 >= GOOD_PROFIT_TARGET * 0.7 else "🔴")
 
+            property_url_part = prop.get("propertyUrl") or f"/properties/{prop_id}"
             listing = {
                 "id": prop_id,
                 "area": area,
@@ -204,7 +221,7 @@ def filter_properties(properties: List[Dict], area: str, seen_ids: Set[str]) -> 
                 "target_profit_70": p["target_profit_70"],
                 "score10": score10,
                 "rag": rag,
-                "url": f"https://www.rightmove.co.uk{prop.get('propertyUrl')}",
+                "url": f"https://www.rightmove.co.uk{property_url_part}",
             }
             results.append(listing)
 
@@ -232,7 +249,8 @@ async def scrape_once(seen_ids: Set[str], sent_today: int) -> int:
                 return new_sent_count
 
             seen_ids.add(listing["id"])
-            print(f"📤 SENT PROPERTY: {listing['address']} – £{listing['rent_pcm']} – {listing['bedrooms']} beds / {listing['bathrooms']} baths")
+            print(f"📤 SENT PROPERTY: {listing['address']} – £{listing['rent_pcm']} – "
+                  f"{listing['bedrooms']} beds / {listing['bathrooms']} baths")
             try:
                 post_json(WEBHOOK_URL, listing)
                 new_sent_count += 1
@@ -269,11 +287,13 @@ async def scraper_task() -> None:
 # ========= Telegram bot: welcome + ID capture =========
 def welcome_text() -> str:
     return (
-        "👋 <b>Welcome to RentRadar Demo!</b>\n\n"
-        "✅ You’re now connected.\n"
-        "Over the next 3 days, you’ll receive live property alerts so you can see how "
-        "RentRadar finds high-profit rent-to-SA deals 🚀\n\n"
-        "👉 Your first alert will be sent shortly!"
+        "👋 <b>Welcome to RentRadar — 3-Day Demo</b>\n\n"
+        "Here’s what to expect:\n"
+        "• We scan Rightmove 24/7 for your criteria\n"
+        "• We estimate SA profit at 50% / 70% / 100%\n"
+        "• We’ll send demo leads here so you can see it in action\n\n"
+        "<i>Note: Demo leads are shared with all trial users. Paid members get "
+        "exclusive alerts for their own area & criteria.</i> 🚀"
     )
 
 def build_start_payload(update: Update, start_param: Optional[str]) -> dict:
@@ -308,16 +328,38 @@ async def tg_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not ok:
         log.error("Failed to post /start event to webhook")
 
-    # 2) Send welcome message immediately
+    # 2) Send welcome message immediately with buttons
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📩 What I’ll receive", callback_data="what_receive")],
+        [InlineKeyboardButton("⚡ Upgrade to Exclusive Alerts", url="https://rent-radar.co.uk")],
+    ])
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
         text=welcome_text(),
         parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
+        reply_markup=kb,
     )
 
 async def tg_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Commands:\n/start – connect\n/help – this help")
+
+async def tg_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    data = (query.data or "").strip()
+    if data == "what_receive":
+        await query.answer()
+        await query.message.reply_text(
+            "You’ll receive demo Rent-to-SA leads with:\n"
+            "• Rent, bills & fees\n"
+            "• ADR + occupancy\n"
+            "• Profit at 50% / 70% / 100%\n"
+            "• Direct link to the listing"
+        )
+    else:
+        await query.answer()
 
 async def telegram_bot_task() -> None:
     if not TELEGRAM_BOT_TOKEN:
@@ -329,6 +371,7 @@ async def telegram_bot_task() -> None:
         app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
         app.add_handler(CommandHandler("start", tg_start))
         app.add_handler(CommandHandler("help", tg_help))
+        app.add_handler(CallbackQueryHandler(tg_callback))
 
         log.info("🤖 Telegram bot starting (polling)…")
         await app.initialize()
@@ -342,10 +385,13 @@ async def telegram_bot_task() -> None:
 
 # ========= Entry =========
 async def main() -> None:
-    await asyncio.gather(
-        scraper_task(),
-        telegram_bot_task()
-    )
+    if RUN_SCRAPER:
+        await asyncio.gather(
+            scraper_task(),
+            telegram_bot_task()
+        )
+    else:
+        await telegram_bot_task()
 
 if __name__ == "__main__":
     asyncio.run(main())
