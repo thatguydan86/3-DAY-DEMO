@@ -1,13 +1,21 @@
+import os
 import asyncio
 import time
 import random
 import requests
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Optional
+import logging
+
+# Telegram bot (async)
+from telegram import Update
+from telegram.constants import ParseMode
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 print("🚀 Starting RentRadar DEMO…")
 
 # ========= Config =========
-WEBHOOK_URL = "https://hook.eu2.make.com/m4n56tg2c1txony43nlyjrrsykkf7ij4"
+WEBHOOK_URL = "https://hook.eu2.make.com/m4n56tg2c1txony43nlyjrrsykkf7ij4"  # your existing Make.com webhook
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
 # Search locations and Rightmove location IDs
 LOCATION_IDS: Dict[str, str] = {
@@ -71,6 +79,13 @@ HMO_KEYWORDS = [
 
 print("✅ Config loaded")
 
+# ========= Logging =========
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
+log = logging.getLogger("rentradar")
+
 # ========= Helpers =========
 def monthly_net_from_adr(adr: float, occ: float) -> float:
     gross = adr * occ * 30
@@ -102,6 +117,19 @@ def is_hmo_or_room(listing: Dict) -> bool:
         listing.get("propertySubType", "").lower()
     ]
     return any(keyword in text for text in text_fields for keyword in HMO_KEYWORDS)
+
+def post_json(url: str, payload: dict, retries: int = 3, timeout: int = 12) -> bool:
+    """Resilient POST to Make.com (or any webhook)."""
+    for attempt in range(1, retries + 1):
+        try:
+            r = requests.post(url, json=payload, timeout=timeout)
+            if 200 <= r.status_code < 300:
+                return True
+            log.warning("Webhook non-2xx (attempt %d): %s %s", attempt, r.status_code, r.text[:200])
+        except requests.RequestException as e:
+            log.warning("Webhook error (attempt %d): %s", attempt, e)
+        time.sleep(0.8 * attempt)
+    return False
 
 # ========= Rightmove fetch =========
 def fetch_properties(location_id: str) -> List[Dict]:
@@ -188,7 +216,7 @@ def filter_properties(properties: List[Dict], area: str, seen_ids: Set[str]) -> 
 # ========= Scraper loop =========
 async def scrape_once(seen_ids: Set[str], sent_today: int) -> int:
     new_sent_count = sent_today
-    send_interval = (ACTIVE_HOURS * 3600) // DAILY_SEND_LIMIT
+    send_interval = max(1, (ACTIVE_HOURS * 3600) // max(1, DAILY_SEND_LIMIT))
 
     for area, loc_id in LOCATION_IDS.items():
         print(f"\n📍 Searching {area}…")
@@ -206,14 +234,14 @@ async def scrape_once(seen_ids: Set[str], sent_today: int) -> int:
             seen_ids.add(listing["id"])
             print(f"📤 SENT PROPERTY: {listing['address']} – £{listing['rent_pcm']} – {listing['bedrooms']} beds / {listing['bathrooms']} baths")
             try:
-                requests.post(WEBHOOK_URL, json=listing, timeout=10)
+                post_json(WEBHOOK_URL, listing)
                 new_sent_count += 1
                 await asyncio.sleep(send_interval)
             except Exception as e:
                 print(f"⚠️ Failed to POST to webhook: {e}")
     return new_sent_count
 
-async def main() -> None:
+async def scraper_task() -> None:
     print("🚀 Scraper started in DEMO mode!")
     seen_ids: Set[str] = set()
     sent_today = 0
@@ -237,6 +265,88 @@ async def main() -> None:
         except Exception as e:
             print(f"🔥 Error: {e}")
             await asyncio.sleep(300)
+
+# ========= Telegram bot: welcome + ID capture =========
+def welcome_text() -> str:
+    return (
+        "👋 <b>Welcome to RentRadar Demo!</b>\n\n"
+        "✅ You’re now connected.\n"
+        "Over the next 3 days, you’ll receive live property alerts so you can see how "
+        "RentRadar finds high-profit rent-to-SA deals 🚀\n\n"
+        "👉 Your first alert will be sent shortly!"
+    )
+
+def build_start_payload(update: Update, start_param: Optional[str]) -> dict:
+    user = update.effective_user
+    chat = update.effective_chat
+    return {
+        "event": "start",
+        "source": "telegram_bot",
+        "ts": int(time.time()),
+        "start_param": start_param or "",
+        "telegram": {
+            "user_id": user.id if user else None,
+            "username": user.username if user else None,
+            "first_name": user.first_name if user else None,
+            "last_name": user.last_name if user else None,
+            "language_code": getattr(user, "language_code", None),
+        },
+        "chat": {
+            "id": chat.id if chat else None,
+            "type": chat.type if chat else None,
+            "title": getattr(chat, "title", None),
+        },
+    }
+
+async def tg_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Deep-link param from /start <param>
+    start_param = context.args[0] if context.args else None
+
+    # 1) Post user info to Make.com so you can map ID to form submission
+    payload = build_start_payload(update, start_param)
+    ok = post_json(WEBHOOK_URL, payload)
+    if not ok:
+        log.error("Failed to post /start event to webhook")
+
+    # 2) Send welcome message immediately
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=welcome_text(),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+async def tg_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("Commands:\n/start – connect\n/help – this help")
+
+async def telegram_bot_task() -> None:
+    if not TELEGRAM_BOT_TOKEN:
+        log.warning("TELEGRAM_BOT_TOKEN not set; Telegram bot will NOT run.")
+        # Keep alive (don’t crash) if token missing
+        while True:
+            await asyncio.sleep(3600)
+    else:
+        app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        app.add_handler(CommandHandler("start", tg_start))
+        app.add_handler(CommandHandler("help", tg_help))
+        log.info("🤖 Telegram bot polling…")
+        # run_polling blocks; wrap into asyncio-friendly call
+        await app.initialize()
+        await app.start()
+        try:
+            # Run indefinitely; this coroutine will keep the bot alive
+            await asyncio.Event().wait()
+        finally:
+            await app.stop()
+            await app.shutdown()
+
+# ========= Entry =========
+async def main() -> None:
+    # Run scraper and Telegram bot concurrently
+    await asyncio.gather(
+        scraper_task(),
+        telegram_bot_task()
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
