@@ -16,7 +16,7 @@ print("🚀 Starting RentRadar DEMO…")
 # ========= Env / Config =========
 WEBHOOK_URL = os.getenv(
     "WEBHOOK_URL",
-    "https://hook.eu2.make.com/m4n56tg2c1txony43nlyjrrsykkf7ij4"
+    "https://hook.eu2.make.com/m4n56tg2c1txony43nlyjrrsykkf7ij4"  # fallback
 ).strip()
 
 # Use env var if present; otherwise fall back to your token string
@@ -25,7 +25,7 @@ TELEGRAM_BOT_TOKEN = os.getenv(
     "8414219699:AAGOkFFDGEwlkxC8dsXXo0Wujt6c-ssMUVM"
 ).strip()
 
-# Toggle scraper (set to False if you only want ID capture)
+# Toggle scraper (set False if you only want ID capture + welcome)
 RUN_SCRAPER = True
 
 # Search locations and Rightmove location IDs
@@ -162,7 +162,6 @@ def fetch_properties(location_id: str) -> List[Dict]:
     }
     url = "https://www.rightmove.co.uk/api/_search"
     headers = {
-        # Helps reduce HTTP 403s
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     }
@@ -364,7 +363,6 @@ async def tg_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def telegram_bot_task() -> None:
     if not TELEGRAM_BOT_TOKEN:
         log.warning("TELEGRAM_BOT_TOKEN not set; Telegram bot will NOT run.")
-        # keep the coroutine alive so gather() doesn't exit
         while True:
             await asyncio.sleep(3600)
     else:
@@ -375,6 +373,10 @@ async def telegram_bot_task() -> None:
 
         log.info("🤖 Telegram bot starting (polling)…")
         await app.initialize()
+
+        # IMPORTANT: ensure no webhook is set, or polling won't receive updates
+        await app.bot.delete_webhook(drop_pending_updates=True)
+
         await app.start()
         try:
             # Keep bot running forever
