@@ -6,9 +6,9 @@ import requests
 import logging
 from typing import Dict, List, Set, Optional
 
-# Keepalive web server for Railway
-from flask import Flask
+# Keepalive web server for Railway (no extra deps)
 import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # Telegram (async)
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -47,12 +47,12 @@ MAX_BEDS = 4
 MIN_BATHS = 0
 MIN_RENT = 300
 MAX_PRICE = 1300
-GOOD_PROFIT_TARGET = 950  # used for scoring AND Telegram target
+GOOD_PROFIT_TARGET = 950
 BOOKING_FEE_PCT = 0.15
 DAILY_SEND_LIMIT = 5
-ACTIVE_HOURS = 14  # spread sends across 14 hours
+ACTIVE_HOURS = 14
 
-# Bills per area & bedroom count (incl council tax + utilities)
+# Bills per area & bedroom count
 BILLS_PER_AREA: Dict[str, Dict[int, int]] = {
     "FY1": {1: 420, 2: 430, 3: 460},
     "FY2": {1: 420, 2: 430, 3: 460},
@@ -133,7 +133,6 @@ def is_hmo_or_room(listing: Dict) -> bool:
     return any(keyword in text for text in text_fields for keyword in HMO_KEYWORDS)
 
 def post_json(url: str, payload: dict, retries: int = 3, timeout: int = 12) -> bool:
-    """Resilient POST to Make.com (or any webhook)."""
     for attempt in range(1, retries + 1):
         try:
             r = requests.post(url, json=payload, timeout=timeout)
@@ -156,15 +155,15 @@ def fetch_properties(location_id: str) -> List[Dict]:
         "currencyCode": "GBP",
         "sortType": 6,
         "viewType": "LIST",
-        "minBedrooms": MIN_BEDS,
-        "maxBedrooms": MAX_BEDS,
-        "minBathrooms": MIN_BATHS,
-        "minPrice": MIN_RENT,
-        "maxPrice": MAX_PRICE,
+        "minBedrooms": 1,
+        "maxBedrooms": 4,
+        "minBathrooms": 0,
+        "minPrice": 300,
+        "maxPrice": 1300,
         "_includeLetAgreed": "on",
     }
     url = "https://www.rightmove.co.uk/api/_search"
-    headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
         resp = requests.get(url, params=params, headers=headers, timeout=30)
         if resp.status_code != 200:
@@ -318,16 +317,15 @@ def build_start_payload(update: Update, start_param: Optional[str]) -> dict:
     }
 
 async def tg_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # Deep-link param from /start <param> (e.g., ?start=demo123)
     start_param = context.args[0] if context.args else None
 
-    # 1) Post user info to Make.com so you can map ID to form submission
+    # 1) Post user info to Make.com
     payload = build_start_payload(update, start_param)
     ok = post_json(WEBHOOK_URL, payload)
     if not ok:
         log.error("Failed to post /start event to webhook")
 
-    # 2) Send welcome message immediately with buttons
+    # 2) Welcome with buttons
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📩 What I’ll receive", callback_data="what_receive")],
         [InlineKeyboardButton("⚡ Upgrade to Exclusive Alerts", url="https://rent-radar.co.uk")],
@@ -373,29 +371,24 @@ async def telegram_bot_task() -> None:
 
         log.info("🤖 Telegram bot starting (polling)…")
         await app.initialize()
-
-        # Ensure no webhook is set, or polling won't receive updates
         await app.bot.delete_webhook(drop_pending_updates=True)
-
         await app.start()
         try:
-            # Keep bot running forever (processes updates in background)
             await asyncio.Event().wait()
         finally:
             await app.stop()
             await app.shutdown()
 
-# ========= Keepalive Web Server (Railway) =========
-flask_app = Flask(__name__)
+# ========= Keepalive HTTP Server (Railway) =========
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
 
-@flask_app.route("/")
-def home():
-    return "RentRadar bot is running!", 200
-
-def run_flask():
-    # Railway typically maps $PORT; default to 8080
+def start_http_server():
     port = int(os.getenv("PORT", "8080"))
-    flask_app.run(host="0.0.0.0", port=port)
+    HTTPServer(("0.0.0.0", port), HealthHandler).serve_forever()
 
 # ========= Entry =========
 async def main() -> None:
@@ -409,5 +402,5 @@ async def main() -> None:
 
 if __name__ == "__main__":
     # Start keepalive web server in a background thread
-    threading.Thread(target=run_flask, daemon=True).start()
+    threading.Thread(target=start_http_server, daemon=True).start()
     asyncio.run(main())
