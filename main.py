@@ -6,6 +6,10 @@ import requests
 import logging
 from typing import Dict, List, Set, Optional
 
+# Keepalive web server for Railway
+from flask import Flask
+import threading
+
 # Telegram (async)
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -19,7 +23,6 @@ WEBHOOK_URL = os.getenv(
     "https://hook.eu2.make.com/m4n56tg2c1txony43nlyjrrsykkf7ij4"  # fallback
 ).strip()
 
-# Use env var if present; otherwise fall back to your token string
 TELEGRAM_BOT_TOKEN = os.getenv(
     "TELEGRAM_BOT_TOKEN",
     "8414219699:AAGOkFFDGEwlkxC8dsXXo0Wujt6c-ssMUVM"
@@ -161,10 +164,7 @@ def fetch_properties(location_id: str) -> List[Dict]:
         "_includeLetAgreed": "on",
     }
     url = "https://www.rightmove.co.uk/api/_search"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    }
+    headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"}
     try:
         resp = requests.get(url, params=params, headers=headers, timeout=30)
         if resp.status_code != 200:
@@ -385,6 +385,18 @@ async def telegram_bot_task() -> None:
             await app.stop()
             await app.shutdown()
 
+# ========= Keepalive Web Server (Railway) =========
+flask_app = Flask(__name__)
+
+@flask_app.route("/")
+def home():
+    return "RentRadar bot is running!", 200
+
+def run_flask():
+    # Railway typically maps $PORT; default to 8080
+    port = int(os.getenv("PORT", "8080"))
+    flask_app.run(host="0.0.0.0", port=port)
+
 # ========= Entry =========
 async def main() -> None:
     if RUN_SCRAPER:
@@ -396,4 +408,6 @@ async def main() -> None:
         await telegram_bot_task()
 
 if __name__ == "__main__":
+    # Start keepalive web server in a background thread
+    threading.Thread(target=run_flask, daemon=True).start()
     asyncio.run(main())
