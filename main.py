@@ -3,19 +3,19 @@ import asyncio
 import time
 import random
 import requests
-from typing import Dict, List, Set, Optional
 import logging
+from typing import Dict, List, Set, Optional
 
-# Telegram bot (async)
+# Telegram (async)
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 print("🚀 Starting RentRadar DEMO…")
 
-# ========= Config =========
-WEBHOOK_URL = "https://hook.eu2.make.com/m4n56tg2c1txony43nlyjrrsykkf7ij4"  # your existing Make.com webhook
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+# ========= Env / Config =========
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://hook.eu2.make.com/m4n56tg2c1txony43nlyjrrsykkf7ij4").strip()
+TELEGRAM_BOT_TOKEN = os.getenv("8414219699:AAGOkFFDGEwlkxC8dsXXo0Wujt6c-ssMUVM", "").strip()
 
 # Search locations and Rightmove location IDs
 LOCATION_IDS: Dict[str, str] = {
@@ -286,20 +286,20 @@ def build_start_payload(update: Update, start_param: Optional[str]) -> dict:
         "start_param": start_param or "",
         "telegram": {
             "user_id": user.id if user else None,
-            "username": user.username if user else None,
-            "first_name": user.first_name if user else None,
-            "last_name": user.last_name if user else None,
+            "username": getattr(user, "username", None),
+            "first_name": getattr(user, "first_name", None),
+            "last_name": getattr(user, "last_name", None),
             "language_code": getattr(user, "language_code", None),
         },
         "chat": {
             "id": chat.id if chat else None,
-            "type": chat.type if chat else None,
+            "type": getattr(chat, "type", None),
             "title": getattr(chat, "title", None),
         },
     }
 
 async def tg_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # Deep-link param from /start <param>
+    # Deep-link param from /start <param> (e.g., ?start=demo123)
     start_param = context.args[0] if context.args else None
 
     # 1) Post user info to Make.com so you can map ID to form submission
@@ -322,19 +322,19 @@ async def tg_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def telegram_bot_task() -> None:
     if not TELEGRAM_BOT_TOKEN:
         log.warning("TELEGRAM_BOT_TOKEN not set; Telegram bot will NOT run.")
-        # Keep alive (don’t crash) if token missing
+        # keep the coroutine alive so gather() doesn't exit
         while True:
             await asyncio.sleep(3600)
     else:
         app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
         app.add_handler(CommandHandler("start", tg_start))
         app.add_handler(CommandHandler("help", tg_help))
-        log.info("🤖 Telegram bot polling…")
-        # run_polling blocks; wrap into asyncio-friendly call
+
+        log.info("🤖 Telegram bot starting (polling)…")
         await app.initialize()
         await app.start()
         try:
-            # Run indefinitely; this coroutine will keep the bot alive
+            # Keep bot running forever
             await asyncio.Event().wait()
         finally:
             await app.stop()
@@ -342,7 +342,6 @@ async def telegram_bot_task() -> None:
 
 # ========= Entry =========
 async def main() -> None:
-    # Run scraper and Telegram bot concurrently
     await asyncio.gather(
         scraper_task(),
         telegram_bot_task()
