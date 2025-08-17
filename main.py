@@ -49,7 +49,7 @@ BOOKING_FEE_PCT = 0.15
 DAILY_SEND_LIMIT = 5
 ACTIVE_HOURS = 14  # spread sends across 14 hours
 
-# Bills per area & bedroom count (realistic, incl council tax + utilities)
+# Bills per area & bedroom count (incl. council tax + utilities)
 BILLS_PER_AREA: Dict[str, Dict[int, int]] = {
     "FY1": {1: 420, 2: 430, 3: 460},
     "FY2": {1: 420, 2: 430, 3: 460},
@@ -374,7 +374,7 @@ async def telegram_bot_task() -> None:
         log.info("🤖 Telegram bot starting (polling)…")
         await app.initialize()
 
-        # IMPORTANT: ensure no webhook is set, or polling won't receive updates
+        # Ensure no webhook is set, or polling won't receive updates
         await app.bot.delete_webhook(drop_pending_updates=True)
 
         await app.start()
