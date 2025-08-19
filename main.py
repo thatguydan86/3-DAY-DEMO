@@ -25,7 +25,7 @@ WEBHOOK_URL = os.getenv(
 
 TELEGRAM_BOT_TOKEN = os.getenv(
     "TELEGRAM_BOT_TOKEN",
-    "xxx"  # 🔒 replace
+    "8414219699:AAGOkFFDGEwlkxC8dsXXo0Wujt6c-ssMUVM"
 ).strip()
 
 # Toggle scraper
@@ -35,15 +35,15 @@ RUN_SCRAPER = True
 LOCATION_IDS: Dict[str, str] = {
     "FY1": "OUTCODE^915",   # Blackpool
     "FY2": "OUTCODE^916",
+    "FY4": "OUTCODE^918",
     "PL1": "OUTCODE^2054",  # Plymouth
     "PL4": "OUTCODE^2083",
     "LL30": "OUTCODE^1464", # Llandudno
     "LL31": "OUTCODE^1465",
-    "FY4": "OUTCODE^918"
 }
 
-# ✅ Round robin demo areas → now includes ALL locations
-DEMO_AREAS = list(LOCATION_IDS.keys())
+# Round robin demo areas (all included, starting with LL30)
+DEMO_AREAS = ["LL30", "LL31", "FY1", "FY2", "FY4", "PL1", "PL4"]
 
 MIN_BEDS = 1
 MAX_BEDS = 4
@@ -186,7 +186,7 @@ def filter_properties(properties: List[Dict], area: str, seen_ids: Set[str]) -> 
             baths = prop.get("bathrooms", 1)
             rent = prop.get("price", {}).get("amount")
 
-            if not beds or not rent or not address:
+            if not beds or not rent:
                 continue
             if prop_id in seen_ids:
                 continue
@@ -196,9 +196,7 @@ def filter_properties(properties: List[Dict], area: str, seen_ids: Set[str]) -> 
             p = calculate_profits(rent, area, beds)
             p70 = p["profit_70"]
 
-            # ✅ Fix score formatting
-            raw_score = max(0, min(10, (p70 / GOOD_PROFIT_TARGET) * 10))
-            score10 = f"{round(raw_score,1)}/10"
+            score10 = round(max(0, min(10, (p70 / GOOD_PROFIT_TARGET) * 10)), 1)
             rag = "🟢" if p70 >= GOOD_PROFIT_TARGET else ("🟡" if p70 >= GOOD_PROFIT_TARGET * 0.7 else "🔴")
 
             property_url_part = prop.get("propertyUrl") or f"/properties/{prop_id}"
@@ -216,7 +214,7 @@ def filter_properties(properties: List[Dict], area: str, seen_ids: Set[str]) -> 
                 "profit_70": p70,
                 "profit_100": p["profit_100"],
                 "target_profit_70": p["target_profit_70"],
-                "score10": score10,
+                "score10": f"{score10}/10",
                 "rag": rag,
                 "url": f"https://www.rightmove.co.uk{property_url_part}",
             }
@@ -251,13 +249,14 @@ async def scraper_task() -> None:
             raw_props = fetch_properties(loc_id)
             filtered = filter_properties(raw_props, area, seen_ids)
 
-            for listing in filtered[:1]:  # only send one per cycle
-                if not listing:  # ✅ skip blanks
-                    continue
-                seen_ids.add(listing["id"])
-                print(f"📤 SENT DEMO: {listing['address']} – £{listing['rent_pcm']}")
-                post_json(WEBHOOK_URL, listing)
-                sent_today += 1
+            if filtered:
+                for listing in filtered[:1]:  # only send one per cycle
+                    seen_ids.add(listing["id"])
+                    print(f"📤 SENT DEMO: {listing['address']} – £{listing['rent_pcm']}")
+                    post_json(WEBHOOK_URL, listing)
+                    sent_today += 1
+            else:
+                print(f"❌ No new leads in {area}, skipping…")
 
             await asyncio.sleep(3600)
 
