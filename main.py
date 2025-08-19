@@ -42,8 +42,8 @@ LOCATION_IDS: Dict[str, str] = {
     "LL31": "OUTCODE^1465",
 }
 
-# Round robin demo areas (all included, starting with LL30)
-DEMO_AREAS = ["LL30", "LL31", "FY1", "FY2", "FY4", "PL1", "PL4"]
+# Round robin demo areas (start at PL1)
+DEMO_AREAS = ["PL1", "FY1", "FY2", "FY4", "PL4", "LL30", "LL31"]
 
 MIN_BEDS = 1
 MAX_BEDS = 4
@@ -57,35 +57,35 @@ ACTIVE_HOURS = 14
 
 # Bills per area
 BILLS_PER_AREA: Dict[str, Dict[int, int]] = {
-    "FY1": {1: 420, 2: 430, 3: 460},
-    "FY2": {1: 420, 2: 430, 3: 460},
-    "FY4": {1: 420, 2: 440, 3: 470},
-    "PL1": {1: 420, 2: 440},
-    "PL4": {1: 420, 2: 440},
-    "LL30": {3: 470, 4: 495},
-    "LL31": {3: 470, 4: 495},
+    "FY1": {1: 420, 2: 430, 3: 460, 4: 480},
+    "FY2": {1: 420, 2: 430, 3: 460, 4: 480},
+    "FY4": {1: 420, 2: 440, 3: 470, 4: 490},
+    "PL1": {1: 420, 2: 440, 3: 460, 4: 480},
+    "PL4": {1: 420, 2: 440, 3: 460, 4: 480},
+    "LL30": {1: 420, 2: 440, 3: 470, 4: 495},
+    "LL31": {1: 420, 2: 440, 3: 470, 4: 495},
 }
 
-# ADR nightly rates
+# ADR nightly rates (with PMI updates for LL30 & LL31)
 NIGHTLY_RATES: Dict[str, Dict[int, float]] = {
-    "FY1": {1: 85, 2: 125, 3: 145},
-    "FY2": {1: 86, 2: 126, 3: 146},
-    "FY4": {1: 87, 2: 128, 3: 150},
-    "PL1": {1: 95, 2: 130},
-    "PL4": {1: 96, 2: 120},
-    "LL30": {3: 167, 4: 272},
-    "LL31": {3: 168, 4: 273},
+    "FY1": {1: 85, 2: 125, 3: 145, 4: 165},
+    "FY2": {1: 86, 2: 126, 3: 146, 4: 166},
+    "FY4": {1: 87, 2: 128, 3: 150, 4: 168},
+    "PL1": {1: 95, 2: 130, 3: 155, 4: 180},
+    "PL4": {1: 96, 2: 120, 3: 150, 4: 175},
+    "LL30": {1: 99, 2: 140, 3: 167, 4: 272},   # PMI
+    "LL31": {1: 103, 2: 124, 3: 168, 4: 273},  # PMI
 }
 
-# Occupancy
+# Occupancy (with PMI updates for LL30 & LL31)
 OCCUPANCY: Dict[str, Dict[int, float]] = {
-    "FY1": {1: 0.65, 2: 0.50, 3: 0.51},
-    "FY2": {1: 0.66, 2: 0.50, 3: 0.51},
-    "FY4": {1: 0.64, 2: 0.52, 3: 0.53},
-    "PL1": {1: 0.67, 2: 0.68},
-    "PL4": {1: 0.64, 2: 0.65},
-    "LL30": {3: 0.63, 4: 0.61},
-    "LL31": {3: 0.63, 4: 0.61},
+    "FY1": {1: 0.65, 2: 0.50, 3: 0.51, 4: 0.52},
+    "FY2": {1: 0.66, 2: 0.50, 3: 0.51, 4: 0.52},
+    "FY4": {1: 0.64, 2: 0.52, 3: 0.53, 4: 0.54},
+    "PL1": {1: 0.67, 2: 0.68, 3: 0.69, 4: 0.70},
+    "PL4": {1: 0.64, 2: 0.65, 3: 0.66, 4: 0.67},
+    "LL30": {1: 0.61, 2: 0.65, 3: 0.63, 4: 0.61},  # PMI
+    "LL31": {1: 0.65, 2: 0.68, 3: 0.63, 4: 0.61},  # PMI
 }
 
 HMO_KEYWORDS = [
@@ -230,7 +230,7 @@ async def scraper_task() -> None:
     seen_ids: Set[str] = set()
     sent_today = 0
     last_reset_day = time.strftime("%Y-%m-%d")
-    current_index = 0
+    current_index = 0  # start with PL1
 
     while True:
         try:
@@ -250,13 +250,13 @@ async def scraper_task() -> None:
             filtered = filter_properties(raw_props, area, seen_ids)
 
             if filtered:
-                for listing in filtered[:1]:  # only send one per cycle
-                    seen_ids.add(listing["id"])
-                    print(f"📤 SENT DEMO: {listing['address']} – £{listing['rent_pcm']}")
-                    post_json(WEBHOOK_URL, listing)
-                    sent_today += 1
+                listing = filtered[0]  # send one per cycle
+                seen_ids.add(listing["id"])
+                print(f"📤 SENT DEMO: {listing['address']} – £{listing['rent_pcm']}")
+                post_json(WEBHOOK_URL, listing)
+                sent_today += 1
             else:
-                print(f"❌ No new leads in {area}, skipping…")
+                print(f"❌ No properties found for {area}, skipping…")
 
             await asyncio.sleep(3600)
 
