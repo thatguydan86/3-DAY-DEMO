@@ -6,11 +6,11 @@ import requests
 import logging
 from typing import Dict, List, Set, Optional
 
-# Keepalive web server for Railway (no extra deps)
+# Keepalive web server for Railway
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# Telegram (async)
+# Telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
@@ -20,7 +20,7 @@ print("🚀 Starting RentRadar DEMO…")
 # ========= Env / Config =========
 WEBHOOK_URL = os.getenv(
     "WEBHOOK_URL",
-    "https://hook.eu2.make.com/m4n56tg2c1txony43nlyjrrsykkf7ij4"  # fallback
+    "https://hook.eu2.make.com/m4n56tg2c1txony43nlyjrrsykkf7ij4"
 ).strip()
 
 TELEGRAM_BOT_TOKEN = os.getenv(
@@ -28,19 +28,16 @@ TELEGRAM_BOT_TOKEN = os.getenv(
     "8414219699:AAGOkFFDGEwlkxC8dsXXo0Wujt6c-ssMUVM"
 ).strip()
 
-# Toggle scraper (set False if you only want ID capture + welcome)
 RUN_SCRAPER = True
 
-# Search locations and Rightmove location IDs
-LOCATION_IDS: Dict[str, str] = {
-    "FY1": "OUTCODE^915",
-    "FY2": "OUTCODE^916",
-    "PL1": "OUTCODE^2054",
-    "PL4": "OUTCODE^2083",
-    "LL30": "OUTCODE^1464",
-    "LL31": "OUTCODE^1465",
-    "FY4": "OUTCODE^918"
+# Demo areas only (round-robin rotation)
+DEMO_LOCATIONS: Dict[str, str] = {
+    "FY1": "OUTCODE^915",  # Blackpool
+    "PL1": "OUTCODE^2054", # Plymouth
+    "LL30": "OUTCODE^1464" # Llandudno
 }
+DEMO_AREAS = list(DEMO_LOCATIONS.items())  # ordered for cycling
+area_index = 0  # global pointer
 
 MIN_BEDS = 1
 MAX_BEDS = 4
@@ -55,34 +52,22 @@ ACTIVE_HOURS = 14
 # Bills per area & bedroom count
 BILLS_PER_AREA: Dict[str, Dict[int, int]] = {
     "FY1": {1: 420, 2: 430, 3: 460},
-    "FY2": {1: 420, 2: 430, 3: 460},
-    "FY4": {1: 420, 2: 440, 3: 470},
     "PL1": {1: 420, 2: 440},
-    "PL4": {1: 420, 2: 440},
     "LL30": {3: 470, 4: 495},
-    "LL31": {3: 470, 4: 495},
 }
 
 # ADR (nightly rates) per area
 NIGHTLY_RATES: Dict[str, Dict[int, float]] = {
     "FY1": {1: 85, 2: 125, 3: 145},
-    "FY2": {1: 86, 2: 126, 3: 146},
-    "FY4": {1: 87, 2: 128, 3: 150},
     "PL1": {1: 95, 2: 130},
-    "PL4": {1: 96, 2: 120},
     "LL30": {3: 167, 4: 272},
-    "LL31": {3: 168, 4: 273},
 }
 
 # Occupancy per area
 OCCUPANCY: Dict[str, Dict[int, float]] = {
     "FY1": {1: 0.65, 2: 0.50, 3: 0.51},
-    "FY2": {1: 0.66, 2: 0.50, 3: 0.51},
-    "FY4": {1: 0.64, 2: 0.52, 3: 0.53},
     "PL1": {1: 0.67, 2: 0.68},
-    "PL4": {1: 0.64, 2: 0.65},
     "LL30": {3: 0.63, 4: 0.61},
-    "LL31": {3: 0.63, 4: 0.61},
 }
 
 HMO_KEYWORDS = [
@@ -116,7 +101,7 @@ def calculate_profits(rent_pcm: int, area: str, beds: int):
 
     return {
         "night_rate": nightly_rate,
-        "occ_rate": int(round(occ_rate * 100)),  # % format
+        "occ_rate": int(round(occ_rate * 100)),
         "total_bills": total_bills,
         "profit_50": profit(0.5),
         "profit_70": profit(0.7),
@@ -155,11 +140,11 @@ def fetch_properties(location_id: str) -> List[Dict]:
         "currencyCode": "GBP",
         "sortType": 6,
         "viewType": "LIST",
-        "minBedrooms": 1,
-        "maxBedrooms": 4,
-        "minBathrooms": 0,
-        "minPrice": 300,
-        "maxPrice": 1300,
+        "minBedrooms": MIN_BEDS,
+        "maxBedrooms": MAX_BEDS,
+        "minBathrooms": MIN_BATHS,
+        "minPrice": MIN_RENT,
+        "maxPrice": MAX_PRICE,
         "_includeLetAgreed": "on",
     }
     url = "https://www.rightmove.co.uk/api/_search"
@@ -167,11 +152,9 @@ def fetch_properties(location_id: str) -> List[Dict]:
     try:
         resp = requests.get(url, params=params, headers=headers, timeout=30)
         if resp.status_code != 200:
-            print(f"⚠️ API request failed: {resp.status_code} for {location_id}")
             return []
         return resp.json().get("properties", [])
-    except Exception as e:
-        print(f"⚠️ Exception fetching properties: {e}")
+    except Exception:
         return []
 
 # ========= Filter =========
@@ -187,20 +170,13 @@ def filter_properties(properties: List[Dict], area: str, seen_ids: Set[str]) -> 
 
             if not beds or not rent:
                 continue
-
             if prop_id in seen_ids:
-                print(f"⏩ SKIPPED DUPLICATE: {address}")
                 continue
-
             if is_hmo_or_room(prop):
-                print(f"🚫 SKIPPED HMO/ROOM: {address}")
                 continue
 
             p = calculate_profits(rent, area, beds)
             p70 = p["profit_70"]
-
-            score10 = round(max(0, min(10, (p70 / GOOD_PROFIT_TARGET) * 10)), 1)
-            rag = "🟢" if p70 >= GOOD_PROFIT_TARGET else ("🟡" if p70 >= GOOD_PROFIT_TARGET * 0.7 else "🔴")
 
             property_url_part = prop.get("propertyUrl") or f"/properties/{prop_id}"
             listing = {
@@ -216,49 +192,47 @@ def filter_properties(properties: List[Dict], area: str, seen_ids: Set[str]) -> 
                 "profit_50": p["profit_50"],
                 "profit_70": p70,
                 "profit_100": p["profit_100"],
-                "target_profit_70": p["target_profit_70"],
-                "score10": score10,
-                "rag": rag,
                 "url": f"https://www.rightmove.co.uk{property_url_part}",
             }
             results.append(listing)
 
-        except Exception as e:
-            print(f"⚠️ Error filtering property: {e}")
+        except Exception:
             continue
     return results
 
-# ========= Scraper loop =========
+# ========= Scraper loop (round-robin) =========
 async def scrape_once(seen_ids: Set[str], sent_today: int) -> int:
+    global area_index
     new_sent_count = sent_today
     send_interval = max(1, (ACTIVE_HOURS * 3600) // max(1, DAILY_SEND_LIMIT))
 
-    for area, loc_id in LOCATION_IDS.items():
-        print(f"\n📍 Searching {area}…")
-        raw_props = fetch_properties(loc_id)
-        filtered = filter_properties(raw_props, area, seen_ids)
+    # pick next area in rotation
+    area, loc_id = DEMO_AREAS[area_index]
+    area_index = (area_index + 1) % len(DEMO_AREAS)
 
-        if not filtered:
-            print(f"❌ NO PROPERTIES FOUND for {area}")
-            continue
+    print(f"\n📍 Searching {area}…")
+    raw_props = fetch_properties(loc_id)
+    filtered = filter_properties(raw_props, area, seen_ids)
 
-        for listing in filtered:
-            if new_sent_count >= DAILY_SEND_LIMIT:
-                return new_sent_count
+    if not filtered:
+        return new_sent_count
 
-            seen_ids.add(listing["id"])
-            print(f"📤 SENT PROPERTY: {listing['address']} – £{listing['rent_pcm']} – "
-                  f"{listing['bedrooms']} beds / {listing['bathrooms']} baths")
-            try:
-                post_json(WEBHOOK_URL, listing)
-                new_sent_count += 1
-                await asyncio.sleep(send_interval)
-            except Exception as e:
-                print(f"⚠️ Failed to POST to webhook: {e}")
+    for listing in filtered:
+        if new_sent_count >= DAILY_SEND_LIMIT:
+            return new_sent_count
+
+        seen_ids.add(listing["id"])
+        print(f"📤 SENT PROPERTY: {listing['address']} – £{listing['rent_pcm']}")
+        try:
+            post_json(WEBHOOK_URL, listing)
+            new_sent_count += 1
+            await asyncio.sleep(send_interval)
+        except Exception as e:
+            print(f"⚠️ Failed to POST: {e}")
+
     return new_sent_count
 
 async def scraper_task() -> None:
-    print("🚀 Scraper started in DEMO mode!")
     seen_ids: Set[str] = set()
     sent_today = 0
     last_reset_day = time.strftime("%Y-%m-%d")
@@ -269,66 +243,29 @@ async def scraper_task() -> None:
             if current_day != last_reset_day:
                 sent_today = 0
                 last_reset_day = current_day
-                print(f"\n🔄 Daily send counter reset for {current_day}")
+                print(f"\n🔄 Reset counter {current_day}")
 
-            print(f"\n⏰ New scrape at {time.strftime('%Y-%m-%d %H:%M:%S')}")
             sent_today = await scrape_once(seen_ids, sent_today)
-
             sleep_duration = 3600 + random.randint(-300, 300)
-            print(f"💤 Sleeping {sleep_duration} seconds…")
             await asyncio.sleep(sleep_duration)
 
         except Exception as e:
             print(f"🔥 Error: {e}")
             await asyncio.sleep(300)
 
-# ========= Telegram bot: welcome + ID capture =========
+# ========= Telegram =========
 def welcome_text() -> str:
     return (
         "👋 <b>Welcome to RentRadar — 3-Day Demo</b>\n\n"
-        "Here’s what to expect:\n"
-        "• We scan Rightmove 24/7 for your criteria\n"
-        "• We estimate SA profit at 50% / 70% / 100%\n"
-        "• We’ll send demo leads here so you can see it in action\n\n"
-        "<i>Note: Demo leads are shared with all trial users. Paid members get "
-        "exclusive alerts for their own area & criteria.</i> 🚀"
+        "• Demo leads rotate between Blackpool, Llandudno & Plymouth\n"
+        "• Profit breakdown at 50% / 70% / 100%\n"
+        "• Exclusive alerts unlocked with upgrade 🚀"
     )
 
-def build_start_payload(update: Update, start_param: Optional[str]) -> dict:
-    user = update.effective_user
-    chat = update.effective_chat
-    return {
-        "event": "start",
-        "source": "telegram_bot",
-        "ts": int(time.time()),
-        "start_param": start_param or "",
-        "telegram": {
-            "user_id": user.id if user else None,
-            "username": getattr(user, "username", None),
-            "first_name": getattr(user, "first_name", None),
-            "last_name": getattr(user, "last_name", None),
-            "language_code": getattr(user, "language_code", None),
-        },
-        "chat": {
-            "id": chat.id if chat else None,
-            "type": getattr(chat, "type", None),
-            "title": getattr(chat, "title", None),
-        },
-    }
-
 async def tg_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    start_param = context.args[0] if context.args else None
-
-    # 1) Post user info to Make.com
-    payload = build_start_payload(update, start_param)
-    ok = post_json(WEBHOOK_URL, payload)
-    if not ok:
-        log.error("Failed to post /start event to webhook")
-
-    # 2) Welcome with buttons
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📩 What I’ll receive", callback_data="what_receive")],
-        [InlineKeyboardButton("⚡ Upgrade to Exclusive Alerts", url="https://rent-radar.co.uk")],
+        [InlineKeyboardButton("⚡ Upgrade", url="https://rent-radar.co.uk")],
     ])
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
@@ -345,41 +282,26 @@ async def tg_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     query = update.callback_query
     if not query:
         return
-    data = (query.data or "").strip()
-    if data == "what_receive":
+    if query.data == "what_receive":
         await query.answer()
-        await query.message.reply_text(
-            "You’ll receive demo Rent-to-SA leads with:\n"
-            "• Rent, bills & fees\n"
-            "• ADR + occupancy\n"
-            "• Profit at 50% / 70% / 100%\n"
-            "• Direct link to the listing"
-        )
-    else:
-        await query.answer()
+        await query.message.reply_text("You’ll receive demo leads from Blackpool, Llandudno & Plymouth.")
 
 async def telegram_bot_task() -> None:
-    if not TELEGRAM_BOT_TOKEN:
-        log.warning("TELEGRAM_BOT_TOKEN not set; Telegram bot will NOT run.")
-        while True:
-            await asyncio.sleep(3600)
-    else:
-        app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        app.add_handler(CommandHandler("start", tg_start))
-        app.add_handler(CommandHandler("help", tg_help))
-        app.add_handler(CallbackQueryHandler(tg_callback))
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", tg_start))
+    app.add_handler(CommandHandler("help", tg_help))
+    app.add_handler(CallbackQueryHandler(tg_callback))
 
-        log.info("🤖 Telegram bot starting (polling)…")
-        await app.initialize()
-        await app.bot.delete_webhook(drop_pending_updates=True)
-        await app.start()
-        try:
-            await asyncio.Event().wait()
-        finally:
-            await app.stop()
-            await app.shutdown()
+    await app.initialize()
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    await app.start()
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await app.stop()
+        await app.shutdown()
 
-# ========= Keepalive HTTP Server (Railway) =========
+# ========= Keepalive =========
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -393,14 +315,10 @@ def start_http_server():
 # ========= Entry =========
 async def main() -> None:
     if RUN_SCRAPER:
-        await asyncio.gather(
-            scraper_task(),
-            telegram_bot_task()
-        )
+        await asyncio.gather(scraper_task(), telegram_bot_task())
     else:
         await telegram_bot_task()
 
 if __name__ == "__main__":
-    # Start keepalive web server in a background thread
     threading.Thread(target=start_http_server, daemon=True).start()
     asyncio.run(main())
